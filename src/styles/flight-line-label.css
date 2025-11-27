@@ -1,0 +1,10 @@
+.flight-line-label {
+  background: rgba(255,255,255,0.9);
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid #2563eb;
+  color: #2563eb;
+  pointer-events: none;
+}

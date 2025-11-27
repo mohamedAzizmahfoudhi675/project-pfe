@@ -1,0 +1,43 @@
+/* Add these to your existing ThermalAnomaly.css */
+
+.image-info {
+  margin-top: 0.5rem;
+  text-align: center;
+}
+
+.image-info small {
+  color: #666;
+  font-style: italic;
+}
+
+.endpoints {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.endpoint {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem;
+  background: #f8f9fa;
+  border-radius: 5px;
+}
+
+.endpoint code {
+  background: #e9ecef;
+  padding: 0.2rem 0.4rem;
+  border-radius: 3px;
+  font-family: 'Courier New', monospace;
+  min-width: 120px;
+}
+
+.api-info {
+  margin-top: 2rem;
+}
+
+.api-info h3 {
+  color: #333;
+  margin-bottom: 1rem;
+}
