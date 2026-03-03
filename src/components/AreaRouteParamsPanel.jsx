@@ -1,6 +1,20 @@
 import React, { useState, useMemo, useCallback } from "react";
 
 // ========== CAMERA SPECIFICATIONS ==========
+/**
+ * Camera specifications for various DJI drone cameras.
+ * Each entry contains sensor dimensions, focal length, and image resolution.
+ * These values are used for Ground Sampling Distance (GSD) calculation.
+ *
+ * @typedef {Object} CameraSpec
+ * @property {number} sensorWidth - Sensor width in millimeters.
+ * @property {number} focalLength - Focal length in millimeters.
+ * @property {number} imageWidth - Image width in pixels.
+ * @property {number} imageHeight - Image height in pixels.
+ * @property {number} [pixelPitch] - Optional pixel pitch in mm (used for thermal cameras).
+ *
+ * For dual-camera setups (like M30T Wide+IR), the object contains separate `wide` and `ir` properties.
+ */
 const CAMERA_SPECS = {
   M30T: {
     sensorWidth: 6.4,
@@ -51,6 +65,19 @@ const CAMERA_SPECS = {
 };
 
 // ========== GSD CALCULATION ==========
+/**
+ * Calculates Ground Sampling Distance (GSD) for DJI cameras.
+ * GSD is the distance on the ground represented by one pixel, expressed in cm/px.
+ *
+ * @param {number} altitudeMetersAGL - Altitude above ground level in meters.
+ * @param {string} cameraModel - Key from CAMERA_SPECS (e.g., "M30T").
+ * @param {Object} options - Optional parameters.
+ * @param {number} options.zoomFactor - Optical zoom factor (default: 1).
+ * @param {number} options.imageWidthOverride - Override native image width (for cropping).
+ * @param {boolean} options.useSlantDistance - If true, adjust altitude for oblique imagery.
+ * @param {number} options.gimbalPitchDeg - Gimbal pitch in degrees (for slant distance).
+ * @returns {number} GSD in cm/pixel, rounded to two decimals.
+ */
 function calculateGSDForDJI(altitudeMetersAGL, cameraModel, options = {}) {
   let specs = CAMERA_SPECS[cameraModel] || CAMERA_SPECS.M30T;
   
@@ -83,6 +110,15 @@ function calculateGSDForDJI(altitudeMetersAGL, cameraModel, options = {}) {
 }
 
 // ========== REUSABLE INPUT COMPONENTS ==========
+/**
+ * Number input with increment/decrement buttons.
+ * @param {Object} props
+ * @param {number} props.value - Current numeric value.
+ * @param {function} props.onChange - Callback when value changes.
+ * @param {number} [props.step=1] - Step increment/decrement.
+ * @param {number} [props.min] - Minimum allowed value.
+ * @param {number} [props.max] - Maximum allowed value.
+ */
 function NumberInput({ value = 0, onChange, step = 1, min, max, ...props }) {
   const safeNumber = useCallback((v) => {
     const n = Number(v);
@@ -137,6 +173,13 @@ function NumberInput({ value = 0, onChange, step = 1, min, max, ...props }) {
   );
 }
 
+/**
+ * Select dropdown component.
+ * @param {Object} props
+ * @param {string} props.value - Current selected value.
+ * @param {function} props.onChange - Change handler (event).
+ * @param {Array<{value: string, label: string}>} props.options - Options array.
+ */
 function SelectInput({ value, onChange, options, className = "", ...props }) {
   return (
     <select
@@ -154,6 +197,12 @@ function SelectInput({ value, onChange, options, className = "", ...props }) {
   );
 }
 
+/**
+ * Simple text input.
+ * @param {Object} props
+ * @param {string} props.value - Current value.
+ * @param {function} props.onChange - Change handler (event).
+ */
 function TextInput({ value, onChange, className = "", ...props }) {
   return (
     <input
@@ -234,6 +283,9 @@ const DEFAULT_PARAMS = {
 };
 
 // ========== SECTION COMPONENT ==========
+/**
+ * Wrapper component for a UI section with a title.
+ */
 const Section = React.memo(({ title, children, className = "" }) => {
   return (
     <div className={`bg-gray-800/50 rounded-xl p-4 ${className}`}>
@@ -248,6 +300,9 @@ const Section = React.memo(({ title, children, className = "" }) => {
 Section.displayName = 'Section';
 
 // ========== LABEL WITH UNIT ==========
+/**
+ * Displays a label with an optional unit in parentheses.
+ */
 const LabelWithUnit = React.memo(({ children, unit }) => {
   return (
     <div className="flex items-center gap-1 mb-2">
@@ -260,6 +315,9 @@ const LabelWithUnit = React.memo(({ children, unit }) => {
 LabelWithUnit.displayName = 'LabelWithUnit';
 
 // ========== GSD DISPLAY COMPONENT ==========
+/**
+ * Displays the calculated GSD and image footprint, along with a quality reference.
+ */
 const GSDDisplay = React.memo(({ gsd, footprint, type = "Ortho" }) => {
   const getQualityLevel = useCallback((gsd) => {
     if (gsd < 1) return { label: "Survey Grade", color: "text-green-400", bg: "bg-green-900/20" };
@@ -322,20 +380,27 @@ const GSDDisplay = React.memo(({ gsd, footprint, type = "Ortho" }) => {
 GSDDisplay.displayName = 'GSDDisplay';
 
 // ========== MAIN PANEL COMPONENT ==========
+/**
+ * Main component for configuring an area route survey.
+ *
+ * Props:
+ * @param {Object} params - Current parameter values (any subset of DEFAULT_PARAMS).
+ * @param {function} onChange - Callback fired when any parameter changes; receives the updated params object.
+ */
 export default function AreaRouteParamsPanel({ params = {}, onChange = () => {} }) {
   const [showAdvanced, setShowAdvanced] = useState(false);
   
-  // IMPROVED: Memoize merged params to prevent unnecessary recalculations
+  // Merge default parameters with provided props
   const merged = useMemo(() => {
     return { ...DEFAULT_PARAMS, ...params };
   }, [params]);
   
-  // IMPROVED: Memoized update function
+  // Generic update function for any key
   const update = useCallback((key, val) => {
     onChange({ ...merged, [key]: val });
   }, [merged, onChange]);
 
-  // IMPROVED: Toggle advanced settings
+  // Toggle advanced section
   const toggleAdvanced = useCallback(() => {
     setShowAdvanced(prev => !prev);
   }, []);
@@ -375,7 +440,7 @@ export default function AreaRouteParamsPanel({ params = {}, onChange = () => {} 
     }
   }, [merged.routeAltitude, merged.cameraModel, merged.collectionMode, merged.gimbalPitchOblique]);
 
-  // IMPROVED: Calculate recommended flight line spacing based on GSD and overlap
+  // Calculate recommended flight line spacing based on GSD and side overlap
   const recommendedSpacing = useMemo(() => {
     const gsd_m = calculatedGSD / 100;
     let specs = CAMERA_SPECS[merged.cameraModel] || CAMERA_SPECS.M30T;
@@ -390,7 +455,7 @@ export default function AreaRouteParamsPanel({ params = {}, onChange = () => {} 
     return Math.max(1, Math.round(spacing));
   }, [calculatedGSD, merged.cameraModel, merged.sideOverlap]);
 
-  // IMPROVED: Calculate photo interval based on GSD and front overlap
+  // Calculate recommended photo interval based on GSD and front overlap
   const recommendedPhotoInterval = useMemo(() => {
     const gsd_m = calculatedGSD / 100;
     let specs = CAMERA_SPECS[merged.cameraModel] || CAMERA_SPECS.M30T;
@@ -557,7 +622,7 @@ export default function AreaRouteParamsPanel({ params = {}, onChange = () => {} 
             </div>
           )}
 
-          {/* ADDED: Flight Line Spacing */}
+          {/* Flight Line Spacing */}
           <div>
             <div className="flex justify-between items-center mb-2">
               <LabelWithUnit unit="m">Flight Line Spacing</LabelWithUnit>
@@ -583,7 +648,7 @@ export default function AreaRouteParamsPanel({ params = {}, onChange = () => {} 
             </div>
           </div>
 
-          {/* ADDED: Photo Interval */}
+          {/* Photo Interval */}
           <div>
             <div className="flex justify-between items-center mb-2">
               <LabelWithUnit unit="m">Photo Interval</LabelWithUnit>
