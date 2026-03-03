@@ -13,14 +13,12 @@ import { MAP_CONFIG, SHAPE_COLORS } from "../utils/MapView.constants";
 import { TopControls } from "./TopControls";
 import { RouteInfoBar } from "./RouteInfoBar";
 
+// ========== CONSTANTS ==========
 /**
- * MapView - robust version
- * - Guards all window.google accesses behind `isLoaded` checks.
- * - Removes hard-coded / fallback API key (expect VITE_GOOGLE_MAPS_API_KEY).
- * - Cleans up polygon listeners reliably.
- * - Preserves all behavior: adding waypoints on click, polygon editing, lawnmower generation.
+ * Predefined waypoint types for drone missions.
+ * Each object contains a value (used internally) and a human-readable label.
+ * @type {Array<{value: string, label: string}>}
  */
-// Add these constants after your imports in MapView.jsx
 const waypointTypes = [
   { value: "straight_stop", label: "Straight route. Aircraft stops" },
   { value: "coordinated_turn", label: "Coordinated Turn (Skips Waypoint)" },
@@ -28,16 +26,56 @@ const waypointTypes = [
   { value: "curved_continue", label: "Curved route. Aircraft continues" },
 ];
 
+/**
+ * Modes for controlling aircraft yaw (heading) at waypoints.
+ * @type {Array<{value: string, label: string}>}
+ */
 const aircraftYawModes = [
   { value: "route", label: "Along the Route" },
   { value: "manual", label: "Manual" },
   { value: "lock", label: "Lock Yaw Axis" },
 ];
 
+/**
+ * Modes for aircraft rotation behavior.
+ * @type {Array<{value: string, label: string}>}
+ */
 const aircraftRotationModes = [
   { value: "auto", label: "Auto" },
   { value: "manual", label: "Manual" },
 ];
+
+/**
+ * Main MapView component for displaying and interacting with a drone mission map.
+ *
+ * Features:
+ * - Displays waypoints, flight path, photo points, and flight lines.
+ * - Allows adding waypoints by clicking on the map.
+ * - Supports area mode with an editable polygon for defining survey areas.
+ * - Integrates with Google Maps Places Autocomplete for searching locations.
+ * - Generates lawnmower (boustrophedon) flight paths from a polygon.
+ * - Shows detailed waypoint information in an InfoWindow on selection.
+ *
+ * @param {Object} props - Component props.
+ * @param {Array} props.waypoints - List of waypoint objects (each with lat, lng, alt, speed, etc.).
+ * @param {Array} props.path - Ordered list of points representing the flight path (with lat, lng).
+ * @param {Array} props.photoPoints - List of points where photos were taken.
+ * @param {Array} props.flightLines - List of line segments [start, end] for display.
+ * @param {Function} props.setWaypoints - State setter for waypoints.
+ * @param {Function} props.setPath - State setter for the flight path.
+ * @param {number} props.altitude - Default altitude for new waypoints (meters).
+ * @param {number} props.speed - Default speed for new waypoints (m/s).
+ * @param {Object} props.mapCenter - Current map center { lat, lng }.
+ * @param {Function} props.setMapCenter - State setter for map center.
+ * @param {number} props.mapZoom - Current map zoom level.
+ * @param {Function} props.setMapZoom - State setter for map zoom.
+ * @param {Object} props.routeParams - Additional route parameters (spacing, speed, etc.).
+ * @param {string} props.routeType - Type of route: "waypoint" or "area".
+ * @param {number|string|null} props.selectedMarker - Index or ID of the currently selected marker.
+ * @param {Function} props.setSelectedMarker - Setter for selected marker.
+ * @param {Function} props.onEditWaypoint - Callback when edit button is clicked for a waypoint.
+ * @returns {JSX.Element} The rendered map component.
+ */
 export default function MapView({
   waypoints = [],
   path = [],
@@ -57,22 +95,29 @@ export default function MapView({
   setSelectedMarker,
   onEditWaypoint,
 }) {
-  const mapRef = useRef(null);
-  const autocompleteRef = useRef(null);
-  const polygonRef = useRef(null);
-  const polygonPathListenersRef = useRef([]);
+  // ========== REFS ==========
+  const mapRef = useRef(null);               // Reference to the Google Map instance
+  const autocompleteRef = useRef(null);      // Reference to the Autocomplete input element
+  const polygonRef = useRef(null);            // Reference to the editable Polygon instance (area mode)
+  const polygonPathListenersRef = useRef([]); // Stores listener objects for polygon editing events
 
-  const [polygonPath, setPolygonPath] = useState([]);
-  const [searchPlace, setSearchPlace] = useState(null);
-  const [generating, setGenerating] = useState(false);
+  // ========== LOCAL STATE ==========
+  const [polygonPath, setPolygonPath] = useState([]);       // Current vertices of the area polygon
+  const [searchPlace, setSearchPlace] = useState(null);     // Place selected from autocomplete
+  const [generating, setGenerating] = useState(false);      // Flag for lawnmower generation
 
+  // ========== GOOGLE MAPS LOADER ==========
   const { isLoaded } = useJsApiLoader({
-    // Provide your API key via VITE_GOOGLE_MAPS_API_KEY
+    // Provide your API key via VITE_GOOGLE_MAPS_API_KEY (environment variable)
     googleMapsApiKey: import.meta.env.VITE_GOOGLE_MAPS_API_KEY || "AIzaSyC20LuxJUoy120cX8HurFsT5pu1JWAvhSA",
     libraries: MAP_CONFIG.libraries,
   });
 
-  // keep polygonPath in sync when switching to area or when waypoints change
+  // ========== EFFECTS ==========
+  /**
+   * Synchronize polygonPath with waypoints when switching to area mode or when waypoints change.
+   * In area mode, waypoints represent the polygon vertices.
+   */
   useEffect(() => {
     if (routeType === "area") {
       setPolygonPath(Array.isArray(waypoints) ? waypoints.map((w) => ({ lat: w.lat, lng: w.lng })) : []);
@@ -81,14 +126,33 @@ export default function MapView({
     }
   }, [routeType, waypoints]);
 
-  // compute area in hectares (guarded)
+  /**
+   * Clean up polygon event listeners on component unmount.
+   */
+  useEffect(() => {
+    return () => {
+      polygonPathListenersRef.current.forEach((l) => l.remove && l.remove());
+      polygonPathListenersRef.current = [];
+    };
+  }, []);
+
+  // ========== MEMOIZED COMPUTATIONS ==========
+  /**
+   * Compute the area of the polygon in hectares (guarded against missing Google Maps library).
+   * Uses Google Maps geometry library for accurate spherical area.
+   * @type {number}
+   */
   const areaHectares = useMemo(() => {
     if (!isLoaded || !window.google?.maps || polygonPath.length < 3) return 0;
     const latlngs = polygonPath.map((p) => new window.google.maps.LatLng(p.lat, p.lng));
     return window.google.maps.geometry.spherical.computeArea(latlngs) / 10000;
   }, [polygonPath, isLoaded]);
 
-  // compute total distance of path (meters)
+  /**
+   * Compute total distance of the flight path in meters (if path exists).
+   * Uses Google Maps geometry library for point‑to‑point distance.
+   * @type {number}
+   */
   const totalDistance = useMemo(() => {
     if (!isLoaded || !window.google?.maps || !Array.isArray(path) || path.length < 2) return 0;
     let distance = 0;
@@ -104,44 +168,37 @@ export default function MapView({
     return distance;
   }, [path, isLoaded]);
 
+  /**
+   * Estimate flight duration based on total distance and speed.
+   * @type {number}
+   */
   const estimatedDuration = useMemo(() => {
     const s = routeParams.speed || speed || 1;
     return s > 0 ? totalDistance / s : 0;
   }, [totalDistance, routeParams.speed, speed]);
 
-  // helpers for turf
-  const closeCoordsRing = (coords) => {
-    if (!coords || coords.length === 0) return coords;
-    const last = coords[coords.length - 1];
-    const first = coords[0];
-    // numeric comparison
-    if (first[0] !== last[0] || first[1] !== last[1]) coords = [...coords, first];
-    return coords;
-  };
-
-  const isValidPolygon = useCallback((pathArr) => {
-    if (!Array.isArray(pathArr) || pathArr.length < 3) return false;
-    try {
-      const coords = pathArr.map((p) => [p.lng, p.lat]);
-      const ring = closeCoordsRing(coords);
-      const poly = turf.polygon([ring]);
-      const kinks = turf.kinks(poly);
-      return !(kinks && Array.isArray(kinks.features) && kinks.features.length > 0);
-    } catch {
-      return false;
-    }
-  }, []);
-
-  // selection index
+  /**
+   * Determine the index of the selected marker.
+   * If selectedMarker is a number, treat as index; otherwise, find by id.
+   * @type {number|null}
+   */
   const selectedIndex = useMemo(() => {
     if (selectedMarker == null) return null;
     if (typeof selectedMarker === "number") return selectedMarker;
     return waypoints.findIndex((w) => w.id === selectedMarker);
   }, [selectedMarker, waypoints]);
 
+  /**
+   * Get the currently selected waypoint object.
+   * @type {Object|null}
+   */
   const selectedWp = selectedIndex != null && selectedIndex >= 0 ? waypoints[selectedIndex] : null;
 
-  // icon anchor & label origin points (guarded)
+  /**
+   * Icon anchor and label origin points, created only after Google Maps is loaded.
+   * Used for custom marker icons.
+   * @type {Object}
+   */
   const ICON_POINTS = useMemo(() => {
     if (!isLoaded || !window.google?.maps) return { Point: { x: 12, y: 22 }, LabelPoint: { x: 12, y: 10 } };
     return {
@@ -150,7 +207,14 @@ export default function MapView({
     };
   }, [isLoaded]);
 
-  // marker icon factory (returns undefined until maps loaded)
+  // ========== CALLBACKS ==========
+  /**
+   * Creates a custom marker icon configuration based on active state.
+   * Returns undefined if Google Maps not loaded.
+   * @param {Object} params
+   * @param {boolean} params.isActive - Whether the marker is currently selected.
+   * @returns {Object|undefined} Icon configuration object.
+   */
   const markerIcon = useCallback(
     ({ isActive }) => {
       if (!isLoaded || !window.google?.maps) return undefined;
@@ -168,7 +232,10 @@ export default function MapView({
     [isLoaded, ICON_POINTS]
   );
 
-  // map click adds a waypoint (works for area mode too)
+  /**
+   * Handles map clicks to add a new waypoint.
+   * @param {google.maps.MapMouseEvent} e - The click event containing lat/lng.
+   */
   const handleMapClick = useCallback(
     (e) => {
       if (!isLoaded) return;
@@ -190,7 +257,11 @@ export default function MapView({
     [altitude, speed, setWaypoints, isLoaded]
   );
 
-  // update waypoint when dragging a vertex marker
+  /**
+   * Updates a waypoint's position after dragging its marker.
+   * @param {number} index - Index of the dragged waypoint.
+   * @param {google.maps.MapMouseEvent} e - Drag end event containing new lat/lng.
+   */
   const handleMarkerDragEnd = useCallback(
     (index, e) => {
       if (typeof index !== "number") return;
@@ -203,6 +274,10 @@ export default function MapView({
     [setWaypoints]
   );
 
+  /**
+   * Deletes a waypoint at the given index.
+   * @param {number} idx - Index of the waypoint to delete.
+   */
   const handleDeleteVertex = useCallback(
     (idx) => {
       setWaypoints((prev) => prev.filter((_, i) => i !== idx));
@@ -210,15 +285,25 @@ export default function MapView({
     [setWaypoints]
   );
 
+  /**
+   * Clears all waypoints and polygon vertices.
+   */
   const clearWaypoints = useCallback(() => {
     setWaypoints([]);
     setPolygonPath([]);
   }, [setWaypoints]);
 
+  /**
+   * Clears the computed flight path.
+   */
   const clearPath = useCallback(() => {
     setPath([]);
   }, [setPath]);
 
+  /**
+   * Handles a place selection from the Autocomplete component.
+   * Pans the map to the selected location and updates searchPlace state.
+   */
   const handlePlaceChanged = useCallback(() => {
     const place = autocompleteRef.current?.getPlace?.();
     if (place?.geometry?.location && mapRef.current) {
@@ -237,11 +322,47 @@ export default function MapView({
     }
   }, [setMapCenter, setMapZoom]);
 
-  // polygon editing listeners: update waypoints when user edits polygon via Google maps handles
+  /**
+   * Utility to ensure a polygon ring is closed (first point equals last point).
+   * Used for Turf operations.
+   * @param {Array} coords - Array of [lng, lat] pairs.
+   * @returns {Array} Closed coordinate array.
+   */
+  const closeCoordsRing = (coords) => {
+    if (!coords || coords.length === 0) return coords;
+    const last = coords[coords.length - 1];
+    const first = coords[0];
+    if (first[0] !== last[0] || first[1] !== last[1]) coords = [...coords, first];
+    return coords;
+  };
+
+  /**
+   * Validates a polygon path to ensure it has no self‑intersections (kinks).
+   * Uses Turf's kinks detection.
+   * @param {Array} pathArr - Array of {lat, lng} objects.
+   * @returns {boolean} True if polygon is valid (no kinks).
+   */
+  const isValidPolygon = useCallback((pathArr) => {
+    if (!Array.isArray(pathArr) || pathArr.length < 3) return false;
+    try {
+      const coords = pathArr.map((p) => [p.lng, p.lat]);
+      const ring = closeCoordsRing(coords);
+      const poly = turf.polygon([ring]);
+      const kinks = turf.kinks(poly);
+      return !(kinks && Array.isArray(kinks.features) && kinks.features.length > 0);
+    } catch {
+      return false;
+    }
+  }, []);
+
+  /**
+   * Attaches listeners to the editable polygon's MVC path to update state when vertices change.
+   * @param {google.maps.Polygon} gmPolygon - The polygon instance.
+   */
   const attachPolygonPathListeners = useCallback(
     (gmPolygon) => {
       if (!gmPolygon || !gmPolygon.getPath || !isLoaded || !window.google?.maps) return;
-      // remove previous listeners
+      // Remove previous listeners
       polygonPathListenersRef.current.forEach((l) => l.remove && l.remove());
       polygonPathListenersRef.current = [];
 
@@ -249,7 +370,6 @@ export default function MapView({
 
       const pushUpdate = () => {
         const arr = pathMVC.getArray().map((ll) => ({ lat: ll.lat(), lng: ll.lng() }));
-        // set both polygonPath and waypoints (preserve ids where possible)
         setPolygonPath(arr);
         setWaypoints((prev) => {
           const next = arr.map((p, i) => ({
@@ -263,7 +383,7 @@ export default function MapView({
         });
       };
 
-      // listen for edits
+      // Listen for edits
       const onSetAt = pathMVC.addListener("set_at", pushUpdate);
       const onInsertAt = pathMVC.addListener("insert_at", pushUpdate);
       const onRemoveAt = pathMVC.addListener("remove_at", pushUpdate);
@@ -273,7 +393,11 @@ export default function MapView({
     [setPolygonPath, setWaypoints, altitude, speed, isLoaded]
   );
 
-  // polygon load hook
+  /**
+   * Callback when the editable polygon is loaded (created) by Google Maps.
+   * Stores the polygon reference and attaches listeners.
+   * @param {google.maps.Polygon} polygon - The polygon instance.
+   */
   const onPolygonLoad = useCallback(
     (polygon) => {
       polygonRef.current = polygon;
@@ -282,15 +406,15 @@ export default function MapView({
     [attachPolygonPathListeners]
   );
 
-  // cleanup listeners on unmount
-  useEffect(() => {
-    return () => {
-      polygonPathListenersRef.current.forEach((l) => l.remove && l.remove());
-      polygonPathListenersRef.current = [];
-    };
-  }, []);
-
-  // generate lawnmower (unchanged logic but wrapped safely)
+  /**
+   * Generates a lawnmower (boustrophedon) flight path from the polygon area.
+   * Uses Turf.js to compute parallel lines and intersections.
+   * @param {Object} opts - Options.
+   * @param {number} opts.spacingMeters - Spacing between flight lines.
+   * @param {number} opts.alt - Altitude to assign to generated points.
+   * @param {number} opts.speed - Speed to assign.
+   * @returns {Array|null} Generated flight points or null on failure.
+   */
   const generateLawnmower = useCallback(
     (opts = {}) => {
       if (!isValidPolygon(polygonPath) || polygonPath.length < 3) return null;
@@ -339,6 +463,7 @@ export default function MapView({
           flightPoints.push({ lat: seg[1][1], lng: seg[1][0], alt, speed: spd });
         });
 
+        // Remove consecutive duplicates (points with same coordinates)
         const deduped = [];
         for (let i = 0; i < flightPoints.length; i++) {
           const p = flightPoints[i];
@@ -358,6 +483,11 @@ export default function MapView({
     [polygonPath, routeParams, altitude, speed, setPath, isValidPolygon]
   );
 
+  // ========== DEBUG PANEL ==========
+  /**
+   * Internal debug panel (only shown in development mode) displaying polygon and path info.
+   * @returns {JSX.Element|null}
+   */
   const DebugPanel = () => (
     <div className="absolute bottom-4 left-4 bg-black bg-opacity-70 text-white p-3 rounded text-xs">
       <div>Polygon vertices: {polygonPath.length}</div>
@@ -368,6 +498,7 @@ export default function MapView({
     </div>
   );
 
+  // ========== RENDER ==========
   if (!isLoaded) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -414,10 +545,12 @@ export default function MapView({
           styles: [{ featureType: "poi", elementType: "labels", stylers: [{ visibility: "off" }] }],
         }}
       >
+        {/* Marker for the searched place */}
         {searchPlace && (
           <Marker position={searchPlace.coordinates} icon={{ url: "https://maps.google.com/mapfiles/ms/icons/red-dot.png" }} title={searchPlace.name} zIndex={1000} />
         )}
 
+        {/* Regular waypoint markers (draggable) */}
         {waypoints.map((wp, i) => (
           <Marker
             key={wp.id ?? i}
@@ -476,7 +609,7 @@ export default function MapView({
           </>
         )}
 
-        {/* Area mode: editable polygon + optional vertex markers */}
+        {/* Area mode: editable polygon + vertex markers */}
         {routeType === "area" && polygonPath && polygonPath.length > 0 && (
           <>
             <Polygon
@@ -515,7 +648,7 @@ export default function MapView({
           </>
         )}
 
-        {/* Render polygon fill if not in area mode but polygonPath exists */}
+        {/* Render polygon fill if not in area mode but polygonPath exists (e.g., after generation) */}
         {polygonPath && polygonPath.length >= 3 && routeType !== "area" && (
           <Polygon
             paths={polygonPath.map((p) => ({ lat: p.lat, lng: p.lng }))}
@@ -529,6 +662,7 @@ export default function MapView({
           />
         )}
 
+        {/* Flight path polyline */}
         {path && path.length >= 2 && (
           <Polyline
             path={path.map((p) => ({ lat: p.lat, lng: p.lng }))}
@@ -541,6 +675,7 @@ export default function MapView({
           />
         )}
 
+        {/* Additional flight lines (e.g., for lawnmower segments) */}
         {Array.isArray(flightLines) &&
           flightLines.length > 0 &&
           flightLines.map((seg, idx) => {
@@ -564,6 +699,7 @@ export default function MapView({
             );
           })}
 
+        {/* Photo point markers (small circles) */}
         {Array.isArray(photoPoints) &&
           photoPoints.length > 0 &&
           photoPoints.map((p, idx) => (
@@ -582,127 +718,128 @@ export default function MapView({
             />
           ))}
 
-         {selectedWp && (
-  <InfoWindow position={{ lat: selectedWp.lat, lng: selectedWp.lng }} onCloseClick={() => setSelectedMarker(null)}>
-    <div className="min-w-[280px] p-3 rounded-lg bg-[#001f3f] text-white shadow-lg text-sm">
-      <h4 className="font-semibold text-blue-300 mb-2 border-b border-blue-500 pb-1">Waypoint Info</h4>
-      <div className="space-y-2">
-        {/* Basic Coordinates */}
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <div className="text-gray-400 text-xs">Latitude</div>
-            <div className="font-mono">{selectedWp.lat?.toFixed(6)}</div>
-          </div>
-          <div>
-            <div className="text-gray-400 text-xs">Longitude</div>
-            <div className="font-mono">{selectedWp.lng?.toFixed(6)}</div>
-          </div>
-        </div>
-
-        {/* Speed and Altitude */}
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <div className="text-gray-400 text-xs">Altitude</div>
-            <div>{selectedWp.alt != null ? `${selectedWp.alt.toFixed(1)} m` : 'Not set'}</div>
-          </div>
-          <div>
-            <div className="text-gray-400 text-xs">Speed</div>
-            <div>{selectedWp.speed != null ? `${selectedWp.speed.toFixed(1)} m/s` : 'Not set'}</div>
-          </div>
-        </div>
-
-        {/* Waypoint Parameters */}
-        <div className="border-t border-blue-700 pt-2 mt-2">
-          <div className="text-gray-400 text-xs mb-1">Waypoint Parameters</div>
-          
-          {/* Waypoint Type */}
-          <div className="flex justify-between items-center mb-1">
-            <span className="text-gray-300">Type:</span>
-            <span className="text-blue-300">
-              {selectedWp.waypointType ? 
-                waypointTypes.find(w => w.value === selectedWp.waypointType)?.label || selectedWp.waypointType 
-                : 'Straight Stop'
-              }
-            </span>
-          </div>
-
-          {/* Aircraft Yaw */}
-          <div className="flex justify-between items-center mb-1">
-            <span className="text-gray-300">Aircraft Yaw:</span>
-            <span className="text-blue-300">
-              {selectedWp.aircraftYaw ? 
-                aircraftYawModes.find(m => m.value === selectedWp.aircraftYaw)?.label || selectedWp.aircraftYaw 
-                : 'Along Route'
-              }
-            </span>
-          </div>
-
-          {/* Gimbal Pitch */}
-          {selectedWp.gimbalPitch != null && (
-            <div className="flex justify-between items-center mb-1">
-              <span className="text-gray-300">Gimbal Pitch:</span>
-              <span className="text-blue-300">{selectedWp.gimbalPitch}°</span>
-            </div>
-          )}
-
-          {/* Aircraft Rotation */}
-          {selectedWp.aircraftRotation && (
-            <div className="flex justify-between items-center mb-1">
-              <span className="text-gray-300">Rotation Mode:</span>
-              <span className="text-blue-300">
-                {aircraftRotationModes.find(m => m.value === selectedWp.aircraftRotation)?.label || selectedWp.aircraftRotation}
-              </span>
-            </div>
-          )}
-
-          {/* Follow Route Settings */}
-          <div className="mt-2 pt-2 border-t border-blue-800">
-            <div className="text-gray-400 text-xs mb-1">Follows Route For:</div>
-            <div className="flex flex-wrap gap-1">
-              {selectedWp.followRouteSpeed && <span className="bg-blue-800 px-2 py-1 rounded text-xs">Speed</span>}
-              {selectedWp.followRouteRelativeAltitude && <span className="bg-blue-800 px-2 py-1 rounded text-xs">Altitude</span>}
-              {selectedWp.followRouteAircraftYaw && <span className="bg-blue-800 px-2 py-1 rounded text-xs">Yaw</span>}
-              {selectedWp.followRouteWaypointType && <span className="bg-blue-800 px-2 py-1 rounded text-xs">Type</span>}
-              {!selectedWp.followRouteSpeed && !selectedWp.followRouteRelativeAltitude && 
-               !selectedWp.followRouteAircraftYaw && !selectedWp.followRouteWaypointType && 
-               <span className="text-gray-500 text-xs">Custom settings</span>}
-            </div>
-          </div>
-
-          {/* Actions Summary */}
-          {selectedWp.actions && selectedWp.actions.length > 0 && (
-            <div className="mt-2 pt-2 border-t border-blue-800">
-              <div className="flex justify-between items-center mb-1">
-                <span className="text-gray-400 text-xs">Actions:</span>
-                <span className="text-green-400 text-xs">{selectedWp.actions.length} configured</span>
-              </div>
-              <div className="space-y-1 max-h-20 overflow-y-auto">
-                {selectedWp.actions.slice(0, 5).map((action, idx) => (
-                  <div key={idx} className="flex items-center gap-2 text-xs bg-blue-900 px-2 py-1 rounded">
-                    <span className="text-blue-300">•</span>
-                    <span className="truncate">{action.type}</span>
+        {/* InfoWindow for selected waypoint (shows detailed parameters) */}
+        {selectedWp && (
+          <InfoWindow position={{ lat: selectedWp.lat, lng: selectedWp.lng }} onCloseClick={() => setSelectedMarker(null)}>
+            <div className="min-w-[280px] p-3 rounded-lg bg-[#001f3f] text-white shadow-lg text-sm">
+              <h4 className="font-semibold text-blue-300 mb-2 border-b border-blue-500 pb-1">Waypoint Info</h4>
+              <div className="space-y-2">
+                {/* Basic Coordinates */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <div className="text-gray-400 text-xs">Latitude</div>
+                    <div className="font-mono">{selectedWp.lat?.toFixed(6)}</div>
                   </div>
-                ))}
-                {selectedWp.actions.length > 5 && (
-                  <div className="text-gray-400 text-xs text-center">
-                    +{selectedWp.actions.length - 5} more actions
+                  <div>
+                    <div className="text-gray-400 text-xs">Longitude</div>
+                    <div className="font-mono">{selectedWp.lng?.toFixed(6)}</div>
                   </div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
+                </div>
 
-      <button
-        className="mt-3 w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-white font-semibold text-sm transition-colors"
-        onClick={() => onEditWaypoint(selectedIndex)}
-      >
-        Edit Waypoint
-      </button>
-    </div>
-  </InfoWindow>
-)}
+                {/* Speed and Altitude */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <div className="text-gray-400 text-xs">Altitude</div>
+                    <div>{selectedWp.alt != null ? `${selectedWp.alt.toFixed(1)} m` : 'Not set'}</div>
+                  </div>
+                  <div>
+                    <div className="text-gray-400 text-xs">Speed</div>
+                    <div>{selectedWp.speed != null ? `${selectedWp.speed.toFixed(1)} m/s` : 'Not set'}</div>
+                  </div>
+                </div>
+
+                {/* Waypoint Parameters */}
+                <div className="border-t border-blue-700 pt-2 mt-2">
+                  <div className="text-gray-400 text-xs mb-1">Waypoint Parameters</div>
+
+                  {/* Waypoint Type */}
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="text-gray-300">Type:</span>
+                    <span className="text-blue-300">
+                      {selectedWp.waypointType ? 
+                        waypointTypes.find(w => w.value === selectedWp.waypointType)?.label || selectedWp.waypointType 
+                        : 'Straight Stop'
+                      }
+                    </span>
+                  </div>
+
+                  {/* Aircraft Yaw */}
+                  <div className="flex justify-between items-center mb-1">
+                    <span className="text-gray-300">Aircraft Yaw:</span>
+                    <span className="text-blue-300">
+                      {selectedWp.aircraftYaw ? 
+                        aircraftYawModes.find(m => m.value === selectedWp.aircraftYaw)?.label || selectedWp.aircraftYaw 
+                        : 'Along Route'
+                      }
+                    </span>
+                  </div>
+
+                  {/* Gimbal Pitch */}
+                  {selectedWp.gimbalPitch != null && (
+                    <div className="flex justify-between items-center mb-1">
+                      <span className="text-gray-300">Gimbal Pitch:</span>
+                      <span className="text-blue-300">{selectedWp.gimbalPitch}°</span>
+                    </div>
+                  )}
+
+                  {/* Aircraft Rotation */}
+                  {selectedWp.aircraftRotation && (
+                    <div className="flex justify-between items-center mb-1">
+                      <span className="text-gray-300">Rotation Mode:</span>
+                      <span className="text-blue-300">
+                        {aircraftRotationModes.find(m => m.value === selectedWp.aircraftRotation)?.label || selectedWp.aircraftRotation}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Follow Route Settings */}
+                  <div className="mt-2 pt-2 border-t border-blue-800">
+                    <div className="text-gray-400 text-xs mb-1">Follows Route For:</div>
+                    <div className="flex flex-wrap gap-1">
+                      {selectedWp.followRouteSpeed && <span className="bg-blue-800 px-2 py-1 rounded text-xs">Speed</span>}
+                      {selectedWp.followRouteRelativeAltitude && <span className="bg-blue-800 px-2 py-1 rounded text-xs">Altitude</span>}
+                      {selectedWp.followRouteAircraftYaw && <span className="bg-blue-800 px-2 py-1 rounded text-xs">Yaw</span>}
+                      {selectedWp.followRouteWaypointType && <span className="bg-blue-800 px-2 py-1 rounded text-xs">Type</span>}
+                      {!selectedWp.followRouteSpeed && !selectedWp.followRouteRelativeAltitude && 
+                       !selectedWp.followRouteAircraftYaw && !selectedWp.followRouteWaypointType && 
+                       <span className="text-gray-500 text-xs">Custom settings</span>}
+                    </div>
+                  </div>
+
+                  {/* Actions Summary */}
+                  {selectedWp.actions && selectedWp.actions.length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-blue-800">
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="text-gray-400 text-xs">Actions:</span>
+                        <span className="text-green-400 text-xs">{selectedWp.actions.length} configured</span>
+                      </div>
+                      <div className="space-y-1 max-h-20 overflow-y-auto">
+                        {selectedWp.actions.slice(0, 5).map((action, idx) => (
+                          <div key={idx} className="flex items-center gap-2 text-xs bg-blue-900 px-2 py-1 rounded">
+                            <span className="text-blue-300">•</span>
+                            <span className="truncate">{action.type}</span>
+                          </div>
+                        ))}
+                        {selectedWp.actions.length > 5 && (
+                          <div className="text-gray-400 text-xs text-center">
+                            +{selectedWp.actions.length - 5} more actions
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <button
+                className="mt-3 w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-white font-semibold text-sm transition-colors"
+                onClick={() => onEditWaypoint(selectedIndex)}
+              >
+                Edit Waypoint
+              </button>
+            </div>
+          </InfoWindow>
+        )}
       </GoogleMap>
 
       {process.env.NODE_ENV === "development" && <DebugPanel />}
