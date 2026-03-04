@@ -22,14 +22,19 @@ import {
 import { Loader } from "@googlemaps/js-api-loader";
 
 // ==================== GLOBAL STATE & WS MANAGER ====================
+/**
+ * Global state object for the WebSocket connection and mobile/drone status.
+ * This module-level object is shared across all instances of the component,
+ * ensuring a single WebSocket connection and unified state.
+ */
 const globalState = {
-  ws: null,
-  reconnectTimer: null,
-  listeners: new Set(),
-  reconnectAttempts: 0,
-  lastMessageTime: null,
-  mobileConnected: false,
-  mobileLastSeen: null,
+  ws: null,                       // WebSocket instance
+  reconnectTimer: null,           // Timer for reconnection attempts
+  listeners: new Set(),           // Set of listener callbacks for state updates
+  reconnectAttempts: 0,           // Number of consecutive reconnection attempts
+  lastMessageTime: null,          // Timestamp of last received message
+  mobileConnected: false,         // Whether a mobile/drone client is connected
+  mobileLastSeen: null,           // Timestamp when mobile was last seen
 };
 
 const WS_URL = "ws://localhost:8080";
@@ -41,7 +46,15 @@ const GOOGLE_MAPS_CONFIG = {
   libraries: ["geometry", "marker"]
 };
 
+/**
+ * WebSocket Manager object – handles connection lifecycle, message routing,
+ * reconnection logic, and listener notifications.
+ */
 const wsManager = {
+  /**
+   * Establishes a new WebSocket connection if none exists or if the current
+   * connection is not open/connecting.
+   */
   connect() {
     if (globalState.ws?.readyState === WebSocket.OPEN || 
         globalState.ws?.readyState === WebSocket.CONNECTING) return;
@@ -91,6 +104,10 @@ const wsManager = {
     }
   },
 
+  /**
+   * Schedules a reconnection attempt with exponential backoff.
+   * The delay is capped at 30 seconds, and max attempts are limited.
+   */
   scheduleReconnect() {
     globalState.reconnectAttempts = Math.min(globalState.reconnectAttempts + 1, MAX_RECONNECT_ATTEMPTS);
     const delay = Math.min(2000 * globalState.reconnectAttempts, 30000);
@@ -98,6 +115,10 @@ const wsManager = {
     globalState.reconnectTimer = setTimeout(() => this.connect(), delay);
   },
 
+  /**
+   * Handles incoming WebSocket messages, updates global state, and notifies listeners.
+   * @param {Object} data - Parsed JSON message from the server.
+   */
   handleMessage(data) {
     const now = Date.now();
     
@@ -155,6 +176,12 @@ const wsManager = {
     }
   },
 
+  /**
+   * Sends a JSON message over the WebSocket if the connection is open.
+   * Adds a timestamp to the message.
+   * @param {Object} obj - Message object to send.
+   * @returns {boolean} True if sent successfully, false otherwise.
+   */
   send(obj) {
     if (globalState.ws?.readyState === WebSocket.OPEN) { 
       globalState.ws.send(JSON.stringify({ ...obj, timestamp: new Date().toISOString() })); 
@@ -163,14 +190,33 @@ const wsManager = {
     return false;
   },
 
+  /**
+   * Registers a listener callback to receive updates.
+   * Immediately sends the current status to the new listener.
+   * @param {Function} callback - Function that will be called with update objects.
+   */
   addListener(callback) {
     globalState.listeners.add(callback);
     callback({ type: 'status', wsStatus: this.getStatus(), reconnectAttempts: globalState.reconnectAttempts });
     callback({ type: 'mobile_status', connected: globalState.mobileConnected, lastSeen: globalState.mobileLastSeen });
   },
 
+  /**
+   * Removes a previously registered listener.
+   * @param {Function} callback - The callback to remove.
+   */
   removeListener(callback) { globalState.listeners.delete(callback); },
+
+  /**
+   * Notifies all registered listeners with a message.
+   * @param {Object} message - The update object to broadcast.
+   */
   notifyListeners(message) { globalState.listeners.forEach(cb => { try { cb(message); } catch (e) {} }); },
+
+  /**
+   * Returns the current connection status as a string.
+   * @returns {string} 'connected', 'connecting', or 'disconnected'.
+   */
   getStatus() { 
     if (!globalState.ws) return 'disconnected'; 
     return globalState.ws.readyState === WebSocket.OPEN ? 'connected' : 
@@ -179,6 +225,19 @@ const wsManager = {
 };
 
 // ==================== FLIGHT TRACKING MAP ====================
+/**
+ * FlightTrackingMap – A Google Maps component that displays the drone's position,
+ * its flight path, and mission waypoints.
+ *
+ * @param {Object} props
+ * @param {Object} props.center - Initial map center { lat, lng }.
+ * @param {number} props.zoom - Initial zoom level.
+ * @param {Object} props.telemetryData - Current drone telemetry (position, movement, status).
+ * @param {Array} props.flightPath - Array of [lat, lng] points representing the flown path.
+ * @param {Array} props.missionWaypoints - Array of waypoint objects (must have latitude, longitude).
+ * @param {Function} props.onClearPath - Callback to clear the flight path.
+ * @returns {JSX.Element}
+ */
 const FlightTrackingMap = ({ 
   center = { lat: 40.7128, lng: -74.0059 },
   zoom = 15, 
@@ -197,6 +256,9 @@ const FlightTrackingMap = ({
   const [showFlightPath, setShowFlightPath] = useState(true);
   const [showWaypoints, setShowWaypoints] = useState(true);
 
+  /**
+   * Initialize the Google Map asynchronously using the Loader.
+   */
   useEffect(() => {
     const initMap = async () => {
       try {
@@ -226,6 +288,9 @@ const FlightTrackingMap = ({
     initMap();
   }, []);
 
+  /**
+   * Update or create the drone marker based on telemetry data.
+   */
   useEffect(() => {
     if (!mapInstanceRef.current || !mapLoaded || !telemetryData) return;
 
@@ -293,6 +358,9 @@ const FlightTrackingMap = ({
 
   }, [telemetryData, mapLoaded]);
 
+  /**
+   * Draw the flight path polyline.
+   */
   useEffect(() => {
     if (!mapInstanceRef.current || !mapLoaded || !showFlightPath) {
       if (flightPathRef.current) {
@@ -328,6 +396,7 @@ const FlightTrackingMap = ({
       map: mapInstanceRef.current
     });
 
+    // Mark the start point with a green circle
     if (flightPath.length > 0) {
       const startPoint = flightPath[0];
       new google.maps.Marker({
@@ -348,6 +417,9 @@ const FlightTrackingMap = ({
 
   }, [flightPath, mapLoaded, showFlightPath]);
 
+  /**
+   * Draw mission waypoints and the connecting path.
+   */
   useEffect(() => {
     if (!mapInstanceRef.current || !mapLoaded || !showWaypoints) {
       waypointMarkersRef.current.forEach(marker => marker.setMap(null));
@@ -359,6 +431,7 @@ const FlightTrackingMap = ({
       return;
     }
 
+    // Clear existing markers
     waypointMarkersRef.current.forEach(marker => marker.setMap(null));
     waypointMarkersRef.current = [];
 
@@ -368,6 +441,7 @@ const FlightTrackingMap = ({
       .filter(wp => wp.latitude && wp.longitude)
       .map(wp => ({ lat: wp.latitude, lng: wp.longitude }));
 
+    // Draw path connecting waypoints
     if (waypointCoords.length > 1) {
       if (missionPathRef.current) {
         missionPathRef.current.setMap(null);
@@ -383,6 +457,7 @@ const FlightTrackingMap = ({
       });
     }
 
+    // Create individual markers for each waypoint
     missionWaypoints.forEach((wp, index) => {
       if (!wp.latitude || !wp.longitude) return;
 
@@ -434,6 +509,7 @@ const FlightTrackingMap = ({
     <div className="relative w-full h-full">
       <div ref={mapRef} className="w-full h-full rounded-lg" />
       
+      {/* Control buttons for toggling layers */}
       <div className="absolute top-4 right-4 flex flex-col gap-2">
         <button
           onClick={() => setShowFlightPath(!showFlightPath)}
@@ -467,6 +543,7 @@ const FlightTrackingMap = ({
         )}
       </div>
 
+      {/* Minimal telemetry overlay on the map */}
       {telemetryData && (
         <div className="absolute bottom-4 left-4 bg-slate-900/90 backdrop-blur border border-slate-700 rounded-lg p-4 shadow-xl">
           <div className="grid grid-cols-3 gap-4 text-sm">
@@ -486,6 +563,7 @@ const FlightTrackingMap = ({
         </div>
       )}
 
+      {/* Loading placeholder */}
       {!mapLoaded && (
         <div className="absolute inset-0 flex items-center justify-center bg-gray-800 rounded-lg">
           <div className="text-white text-lg">Loading Map...</div>
@@ -496,6 +574,12 @@ const FlightTrackingMap = ({
 };
 
 // ==================== MAIN COMPONENT ====================
+/**
+ * DroneFlightTracker – The main component for live drone flight monitoring.
+ * Displays connection status, telemetry data, flight statistics, and a map with the drone's position.
+ * Allows sending mission commands (start, pause, stop) and clearing the recorded path.
+ * @returns {JSX.Element}
+ */
 export default function DroneFlightTracker() {
   const [wsStatus, setWsStatus] = useState(wsManager.getStatus());
   const [mobileStatus, setMobileStatus] = useState({ connected: false, lastSeen: null });
@@ -512,6 +596,10 @@ export default function DroneFlightTracker() {
     startTime: null
   });
 
+  /**
+   * Callback to handle messages from the WebSocket manager.
+   * @param {Object} message - The message object from wsManager.
+   */
   const handleManagerMessage = useCallback((message) => {
     switch (message.type) {
       case 'status': 
@@ -528,12 +616,14 @@ export default function DroneFlightTracker() {
         console.log("📊 Setting telemetry:", telemetry);
         setTelemetryData(telemetry);
         
+        // Update flight path if new position is valid
         if (telemetry?.position?.latitude && telemetry.position.longitude) {
           const newPoint = [telemetry.position.latitude, telemetry.position.longitude];
           
           setFlightPath(prev => {
             const newPath = [...prev, newPoint];
             
+            // Update statistics if there was a previous point
             if (prev.length > 0) {
               const lastPoint = prev[prev.length - 1];
               const distance = calculateDistance(
@@ -552,6 +642,7 @@ export default function DroneFlightTracker() {
               setFlightStats(stats => ({ ...stats, startTime: Date.now() }));
             }
             
+            // Keep only last 500 points to avoid memory issues
             return newPath.slice(-500);
           });
         }
@@ -572,12 +663,18 @@ export default function DroneFlightTracker() {
     }
   }, []);
 
+  /**
+   * Subscribe to WebSocket manager on mount and clean up on unmount.
+   */
   useEffect(() => { 
     wsManager.addListener(handleManagerMessage); 
     if (wsManager.getStatus() === 'disconnected') wsManager.connect(); 
     return () => wsManager.removeListener(handleManagerMessage); 
   }, [handleManagerMessage]);
 
+  /**
+   * Timer to update flight time every second.
+   */
   useEffect(() => {
     if (!flightStats.startTime) return;
     
@@ -591,6 +688,9 @@ export default function DroneFlightTracker() {
     return () => clearInterval(interval);
   }, [flightStats.startTime]);
 
+  /**
+   * Helper to send a command via the WebSocket manager.
+   */
   const sendCommand = useCallback((obj) => wsManager.send(obj), []);
 
   const startMission = () => sendCommand({ type: "mission_start", missionId: missionData?.missionId || "default" });
@@ -601,6 +701,11 @@ export default function DroneFlightTracker() {
     setFlightStats({ totalDistance: 0, maxSpeed: 0, maxAltitude: 0, flightTime: 0, startTime: null });
   };
 
+  /**
+   * Renders a status icon based on connection state.
+   * @param {Object} props
+   * @param {string} props.status - 'connected', 'disconnected', or other.
+   */
   const StatusIcon = ({ status }) => 
     status === "connected" ? <CheckCircle className="w-6 h-6 text-green-500" /> : 
     status === "disconnected" ? <XCircle className="w-6 h-6 text-red-500" /> : 
@@ -612,7 +717,7 @@ export default function DroneFlightTracker() {
   
   const mapCenter = position?.latitude && position?.longitude ? 
     { lat: position.latitude, lng: position.longitude } : 
-    { lat: 37.7749, lng: -122.4194 };
+    { lat: 37.7749, lng: -122.4194 }; // Default to San Francisco
 
   const formatTime = (seconds) => {
     const mins = Math.floor(seconds / 60);
@@ -657,7 +762,7 @@ export default function DroneFlightTracker() {
         <div className="grid grid-cols-1 xl:grid-cols-4 gap-4">
           {/* Left Sidebar - Telemetry */}
           <div className="xl:col-span-1 space-y-4">
-            {/* Live Telemetry */}
+            {/* Live Telemetry Card */}
             <div className="bg-slate-800/50 backdrop-blur border border-slate-700 p-5 rounded-xl">
               <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
                 <Satellite className="w-5 h-5 text-blue-400" />
@@ -717,7 +822,7 @@ export default function DroneFlightTracker() {
               )}
             </div>
 
-            {/* Flight Statistics */}
+            {/* Flight Statistics Card */}
             <div className="bg-slate-800/50 backdrop-blur border border-slate-700 p-5 rounded-xl">
               <h3 className="text-lg font-bold text-white mb-4">Flight Statistics</h3>
               
@@ -749,7 +854,7 @@ export default function DroneFlightTracker() {
               </div>
             </div>
 
-            {/* Mission Control */}
+            {/* Mission Control Card */}
             <div className="bg-slate-800/50 backdrop-blur border border-slate-700 p-5 rounded-xl">
               <h3 className="text-lg font-bold text-white mb-4">Mission Control</h3>
               
@@ -794,7 +899,7 @@ export default function DroneFlightTracker() {
             </div>
           </div>
 
-          {/* Map - Takes remaining space */}
+          {/* Map Area */}
           <div className="xl:col-span-3">
             <div className="bg-slate-800/50 backdrop-blur border border-slate-700 rounded-xl overflow-hidden" style={{ height: 'calc(100vh - 140px)' }}>
               <FlightTrackingMap
@@ -807,7 +912,7 @@ export default function DroneFlightTracker() {
               />
             </div>
             
-            {/* Legend */}
+            {/* Map Legend */}
             <div className="flex justify-between items-center mt-3 px-2">
               <div className="flex gap-4 text-sm text-gray-400">
                 <div className="flex items-center gap-2">
@@ -837,7 +942,14 @@ export default function DroneFlightTracker() {
   );
 }
 
-// Helper function to calculate distance between two GPS coordinates (Haversine formula)
+/**
+ * Calculates the distance between two geographic points using the Haversine formula.
+ * @param {number} lat1 - Latitude of point A (degrees).
+ * @param {number} lon1 - Longitude of point A (degrees).
+ * @param {number} lat2 - Latitude of point B (degrees).
+ * @param {number} lon2 - Longitude of point B (degrees).
+ * @returns {number} Distance in meters.
+ */
 function calculateDistance(lat1, lon1, lat2, lon2) {
   const R = 6371e3; // Earth's radius in meters
   const φ1 = lat1 * Math.PI / 180;
