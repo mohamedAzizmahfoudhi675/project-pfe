@@ -4,12 +4,21 @@ import { Upload, Camera, CheckCircle, AlertCircle, X, Download } from 'lucide-re
 import { saveAs } from 'file-saver';
 import { useModel3D } from '../contexts/Model3DContext';
 
-// WebODM Configuration
+// ==================== WebODM Configuration ====================
+/**
+ * Configuration for connecting to a local WebODM instance.
+ * Adjust BASE_URL if your WebODM runs on a different port or address.
+ */
 const WEBODM_CONFIG = {
   BASE_URL: 'http://localhost:8000',
 };
 
-// Helper functions
+// ==================== Helper Functions ====================
+/**
+ * Converts WebODM status code to human‑readable text.
+ * @param {number} statusCode - The numeric status code from WebODM API.
+ * @returns {string} Status description.
+ */
 const getStatusText = (statusCode) => {
   const statusMap = {
     10: 'QUEUED',
@@ -21,6 +30,11 @@ const getStatusText = (statusCode) => {
   return statusMap[statusCode] || 'UNKNOWN';
 };
 
+/**
+ * Formats processing time (in milliseconds) into a concise string.
+ * @param {number} ms - Processing time in milliseconds.
+ * @returns {string} Formatted time (e.g., "2h 15m", "10m 30s", "45s").
+ */
 const formatProcessingTime = (ms) => {
   if (ms === -1 || !ms) return 'Processing...';
   const seconds = Math.floor(ms / 1000);
@@ -31,7 +45,12 @@ const formatProcessingTime = (ms) => {
   return `${seconds}s`;
 };
 
-// Debounce helper function
+/**
+ * Simple debounce helper to limit how often a function is called.
+ * @param {Function} func - The function to debounce.
+ * @param {number} wait - Debounce delay in milliseconds.
+ * @returns {Function} Debounced version of the function.
+ */
 function debounce(func, wait) {
   let timeout;
   return function executedFunction(...args) {
@@ -44,10 +63,15 @@ function debounce(func, wait) {
   };
 }
 
-// WebODM Iframe Viewer Component
+// ==================== WebODM Iframe Viewer Component ====================
+/**
+ * Displays the WebODM 3D viewer in an iframe for a given task.
+ * @param {Object} props
+ * @param {string|number} props.taskId - The WebODM task ID.
+ * @returns {JSX.Element} An iframe pointing to the WebODM 3D viewer.
+ */
 function WebODMIframeViewer({ taskId }) {
   const iframeUrl = `${WEBODM_CONFIG.BASE_URL}/public/task/${taskId}/iframe/3d/`;
-  
   return (
     <div className="w-full h-full bg-gray-900 rounded-lg">
       <iframe 
@@ -62,8 +86,16 @@ function WebODMIframeViewer({ taskId }) {
   );
 }
 
-// UploadSection Component
+// ==================== UploadSection Component ====================
+/**
+ * Handles authentication with WebODM, image upload, and task polling.
+ * @param {Object} props
+ * @param {Function} props.onUploadComplete - Called when processing finishes (with stats).
+ * @param {Function} props.onProcessingUpdate - Called periodically with progress updates.
+ * @returns {JSX.Element} The upload controls and status.
+ */
 function UploadSection({ onUploadComplete, onProcessingUpdate }) {
+  // ===== Context state =====
   const {
     authToken,
     apiStatus,
@@ -72,7 +104,8 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
     updateModel3DState
   } = useModel3D();
 
-  const [uploadStage, setUploadStage] = useState('idle');
+  // ===== Local state =====
+  const [uploadStage, setUploadStage] = useState('idle'); // 'idle' | 'uploading' | 'processing' | 'complete' | 'error'
   const [progress, setProgress] = useState(0);
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [currentStage, setCurrentStage] = useState('');
@@ -81,7 +114,13 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
   const [loginData, setLoginData] = useState({ username: '', password: '' });
   const fileInputRef = useRef();
 
-  // Memoize functions that are used in effects
+  // ===== WebODM API Helpers =====
+
+  /**
+   * Tests the connection to WebODM API using the provided token.
+   * Fetches projects to verify authentication.
+   * @param {string} [token=authToken] - JWT token.
+   */
   const testAPIConnection = useCallback(async (token = authToken) => {
     if (!token) {
       updateModel3DState({ apiStatus: 'needs_auth' });
@@ -111,6 +150,10 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
     }
   }, [updateModel3DState, authToken]);
 
+  /**
+   * Fetches the list of projects from WebODM.
+   * @param {string} [token=authToken] - JWT token.
+   */
   const fetchProjects = useCallback(async (token = authToken) => {
     if (!token) return;
     try {
@@ -135,7 +178,12 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
     }
   }, [updateModel3DState, authToken]);
 
-  // JWT Authentication
+  /**
+   * Authenticates with WebODM using username/password and stores the JWT token.
+   * @param {string} username - WebODM username.
+   * @param {string} password - WebODM password.
+   * @returns {Promise<string>} The JWT token.
+   */
   const authenticateUser = async (username, password) => {
     try {
       const response = await fetch(`${WEBODM_CONFIG.BASE_URL}/api/token-auth/`, {
@@ -165,24 +213,12 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
     }
   };
 
-  // FIXED: Check for existing token on component mount
-  useEffect(() => {
-    if (!authToken) {
-      const savedToken = localStorage.getItem('webodm_token');
-      if (savedToken) {
-        updateModel3DState({ 
-          authToken: savedToken,
-          apiStatus: 'connected'
-        });
-        testAPIConnection(savedToken);
-      } else {
-        setShowLogin(true);
-        updateModel3DState({ apiStatus: 'needs_auth' });
-      }
-    }
-  }, []); // Empty array - run only once on mount
-
-  // Create project using POST /api/projects/
+  /**
+   * Creates a new project in WebODM.
+   * @param {string} name - Project name.
+   * @param {string} [token=authToken] - JWT token.
+   * @returns {Promise<Object>} The created project object.
+   */
   const createProject = async (name, token = authToken) => {
     if (!token) throw new Error('Not authenticated');
 
@@ -207,6 +243,10 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
     }
   };
 
+  /**
+   * Handles login form submission.
+   * @param {Event} e - Form submit event.
+   */
   const handleLogin = async (e) => {
     e.preventDefault();
     try {
@@ -216,6 +256,9 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
     }
   };
 
+  /**
+   * Logs out by clearing token and resetting state.
+   */
   const handleLogout = () => {
     updateModel3DState({ 
       authToken: null,
@@ -227,6 +270,12 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
     setShowLogin(true);
   };
 
+  // ===== File Upload Handlers =====
+
+  /**
+   * Stores the selected image files in local state.
+   * @param {Event} event - File input change event.
+   */
   const handleFileSelect = (event) => {
     const files = Array.from(event.target.files);
     if (files.length > 0) {
@@ -234,6 +283,9 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
     }
   };
 
+  /**
+   * Uploads the selected images to WebODM, creates a task, and starts polling.
+   */
   const handleUpload = async () => {
     if (!selectedFiles.length) {
       alert('Please select images first');
@@ -248,6 +300,7 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
     setProgress(0);
 
     try {
+      // Determine or create a project
       let projectId = selectedProject;
       let projectObj = null;
 
@@ -270,12 +323,14 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
         projectObj = projects.find(p => String(p.id) === String(projectId)) || null;
       }
 
+      // Prepare multipart form data
       const formData = new FormData();
       selectedFiles.forEach(file => {
         formData.append('images', file);
       });
       formData.append('name', `Task_${Date.now()}`);
 
+      // Send POST to create task
       const uploadResponse = await fetch(
         `${WEBODM_CONFIG.BASE_URL}/api/projects/${projectId}/tasks/`,
         {
@@ -298,6 +353,7 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
       setCurrentTask(taskData);
       setUploadStage('uploaded');
 
+      // Start polling for progress
       pollTaskProgress(projectId, taskData.id, authToken);
 
     } catch (error) {
@@ -307,13 +363,18 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
     }
   };
 
-  // Poll the task endpoint for status
+  /**
+   * Polls the task endpoint at regular intervals to update progress and detect completion.
+   * @param {string|number} projectId - The WebODM project ID.
+   * @param {string|number} taskId - The WebODM task ID.
+   * @param {string} token - JWT token.
+   */
   const pollTaskProgress = async (projectId, taskId, token = authToken) => {
     if (!token) return;
 
-    const intervalMs = 5000;
+    const intervalMs = 5000; // poll every 5 seconds
     let attempts = 0;
-    const maxAttempts = 360;
+    const maxAttempts = 360; // 30 minutes max
 
     const pollInterval = setInterval(async () => {
       attempts += 1;
@@ -349,6 +410,7 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
         let prog = 0;
         let stageDescription = '';
 
+        // Map status to progress percentage and description
         switch (status) {
           case 10:
             prog = 10;
@@ -386,6 +448,7 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
         setProgress(prog);
         setCurrentStage(stageDescription);
 
+        // Notify parent about progress
         onProcessingUpdate({
           taskId: taskId,
           projectId: projectId,
@@ -425,6 +488,12 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
     }, intervalMs);
   };
 
+  // ===== UI Helpers =====
+
+  /**
+   * Returns the appropriate icon based on upload stage.
+   * @returns {JSX.Element} Icon component.
+   */
   const getUploadIcon = () => {
     switch (uploadStage) {
       case 'uploading':
@@ -440,6 +509,10 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
     }
   };
 
+  /**
+   * Returns the button text based on upload stage.
+   * @returns {string} Button label.
+   */
   const getUploadText = () => {
     switch (uploadStage) {
       case 'uploading':
@@ -455,6 +528,10 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
     }
   };
 
+  /**
+   * Returns connection status text and colour for the UI.
+   * @returns {Object} { text: string, color: string }.
+   */
   const getConnectionStatus = () => {
     switch (apiStatus) {
       case 'connected':
@@ -470,6 +547,9 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
     }
   };
 
+  /**
+   * Resets the upload state to idle, clearing files and progress.
+   */
   const resetUpload = () => {
     setUploadStage('idle');
     setProgress(0);
@@ -481,12 +561,34 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
     }
   };
 
+  /**
+   * Opens the WebODM main interface in a new tab.
+   */
   const openWebODM = () => {
     window.open(WEBODM_CONFIG.BASE_URL, '_blank');
   };
 
   const connectionStatus = getConnectionStatus();
 
+  // ===== Effects =====
+  // Restore token on mount
+  useEffect(() => {
+    if (!authToken) {
+      const savedToken = localStorage.getItem('webodm_token');
+      if (savedToken) {
+        updateModel3DState({ 
+          authToken: savedToken,
+          apiStatus: 'connected'
+        });
+        testAPIConnection(savedToken);
+      } else {
+        setShowLogin(true);
+        updateModel3DState({ apiStatus: 'needs_auth' });
+      }
+    }
+  }, []); // Empty dependency array – runs only once
+
+  // ===== Render =====
   return (
     <div className="mb-6">
       <h3 className="text-lg font-semibold text-white mb-3">WebODM Processing</h3>
@@ -543,6 +645,7 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
 
       {!showLogin && authToken && (
         <div className="space-y-4">
+          {/* Project selector */}
           <div className="space-y-2">
             <label className="text-sm text-gray-300">WebODM Project:</label>
             <select
@@ -568,6 +671,7 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
             )}
           </div>
 
+          {/* File selection button */}
           <div>
             <label className="text-sm text-gray-300">Select Images:</label>
             <button
@@ -586,6 +690,7 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
             />
           </div>
 
+          {/* Upload/Process button */}
           <button
             onClick={handleUpload}
             disabled={uploadStage === 'uploading' || uploadStage === 'processing' || selectedFiles.length === 0}
@@ -605,6 +710,7 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
             {getUploadText()}
           </button>
 
+          {/* Progress bar */}
           {(uploadStage === 'uploading' || uploadStage === 'processing') && (
             <div className="w-full bg-gray-700 rounded-full h-2">
               <div
@@ -620,6 +726,7 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
             </div>
           )}
 
+          {/* Action buttons after completion or error */}
           <div className="flex gap-2">
             {(uploadStage === 'complete' || uploadStage === 'error') && (
               <button
@@ -638,6 +745,7 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
             </button>
           </div>
 
+          {/* Info boxes */}
           <div className="bg-purple-900/20 border border-purple-700 rounded-lg p-3">
             <h4 className="text-purple-400 font-semibold mb-2 flex items-center gap-2 text-sm">
               <CheckCircle size={14} />
@@ -671,7 +779,11 @@ function UploadSection({ onUploadComplete, onProcessingUpdate }) {
   );
 }
 
-// Loading Component
+// ==================== Loading Overlay ====================
+/**
+ * Simple full‑screen loading spinner.
+ * @returns {JSX.Element} A centered spinner with "Loading 3D Model..." text.
+ */
 function ModelLoading() {
   return (
     <div className="absolute inset-0 flex items-center justify-center bg-gray-800 bg-opacity-50 z-10">
@@ -683,8 +795,15 @@ function ModelLoading() {
   );
 }
 
-// Main export
+// ==================== Main Component ====================
+/**
+ * Model3D – Main page for WebODM photogrammetry.
+ * Allows users to login, upload images, monitor processing, and view the resulting 3D model.
+ * Uses context (Model3DContext) to persist state across page reloads.
+ * @returns {JSX.Element} The page layout.
+ */
 export default function Model3D() {
+  // ===== Context =====
   const {
     processingStats,
     webodmTask,
@@ -699,21 +818,28 @@ export default function Model3D() {
 
   const [isLoading, setIsLoading] = useState(false);
 
-  // FIXED: Restore scroll position - run only once on mount
+  // ===== Scroll Restoration =====
+  /**
+   * Restore scroll position after the component mounts.
+   */
   useEffect(() => {
     if (scrollPosition > 0) {
       window.scrollTo(0, scrollPosition);
     }
   }, [scrollPosition]);
 
-  // FIXED: Save scroll position on unmount
+  /**
+   * Save scroll position just before the component unmounts.
+   */
   useEffect(() => {
     return () => {
       saveScrollPosition(window.scrollY);
     };
   }, [saveScrollPosition]);
 
-  // FIXED: Scroll event listener with proper cleanup
+  /**
+   * Attach a debounced scroll event listener to continuously save position.
+   */
   useEffect(() => {
     const handleScroll = debounce(() => {
       saveScrollPosition(window.scrollY);
@@ -726,7 +852,11 @@ export default function Model3D() {
     };
   }, [saveScrollPosition]);
 
-  // FIXED: Memoize handlers
+  // ===== Callbacks =====
+  /**
+   * Called when a new task finishes processing.
+   * Updates the context with the task and its stats.
+   */
   const handleUploadComplete = useCallback((data) => {
     updateModel3DState({
       webodmTask: data,
@@ -734,19 +864,31 @@ export default function Model3D() {
     });
   }, [updateModel3DState]);
 
+  /**
+   * Called periodically during processing to log progress (optional).
+   */
   const handleProcessingUpdate = useCallback((data) => {
     console.log('Processing update', data);
   }, []);
 
+  /**
+   * Handles changes to the "Load Project ID" input.
+   */
   const handleLoadProjectIdChange = useCallback((e) => {
     updateModel3DState({ loadProjectId: e.target.value });
   }, [updateModel3DState]);
 
+  /**
+   * Handles changes to the "Load Task ID" input.
+   */
   const handleLoadTaskIdChange = useCallback((e) => {
     updateModel3DState({ loadTaskId: e.target.value });
   }, [updateModel3DState]);
 
-  // FIXED: Memoize the loadExistingTask function
+  /**
+   * Loads an existing completed task from WebODM by project/task IDs.
+   * Fetches task info and updates context if the task is completed.
+   */
   const loadExistingTask = useCallback(async (projectId, taskId) => {
     if (!projectId || !taskId) {
       alert('Provide both projectId and taskId');
@@ -796,7 +938,10 @@ export default function Model3D() {
     }
   }, [updateModel3DState]);
 
-  // FIXED: Memoize other handlers
+  /**
+   * Downloads the textured model zip from WebODM.
+   * Uses file-saver to save the blob.
+   */
   const downloadFromWebODM = useCallback(async () => {
     if (!webodmTask) return;
     try {
@@ -820,10 +965,14 @@ export default function Model3D() {
     }
   }, [webodmTask]);
 
+  /**
+   * Resets the viewer state (clears loaded task).
+   */
   const resetViewer = useCallback(() => {
     resetModel3DState();
   }, [resetModel3DState]);
 
+  // ===== Render =====
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-800 p-6 overflow-y-auto">
       <div className="mb-6">
@@ -832,7 +981,7 @@ export default function Model3D() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        {/* Controls Panel */}
+        {/* Left Column – Controls */}
         <div className="lg:col-span-1">
           <div className="bg-gray-800 rounded-lg shadow-lg p-6 lg:sticky lg:top-6 max-h-[75vh] overflow-y-auto">
             <h2 className="text-xl font-semibold text-white mb-4">WebODM Controls</h2>
@@ -861,7 +1010,7 @@ export default function Model3D() {
               </div>
             )}
 
-            {/* Load existing completed task */}
+            {/* Manual task loader */}
             <div className="bg-gray-900/20 border border-gray-700 rounded-lg p-3 mb-4">
               <h4 className="text-sm text-white font-semibold mb-2">Load Completed Task</h4>
               <div className="space-y-2">
@@ -889,7 +1038,7 @@ export default function Model3D() {
               </div>
             </div>
 
-            {/* Stats */}
+            {/* Processing stats display */}
             {processingStats && (
               <div className="mt-6 pt-4 border-t border-gray-700">
                 <h3 className="text-lg font-semibold text-white mb-3">Processing Stats</h3>
@@ -926,7 +1075,7 @@ export default function Model3D() {
           </div>
         </div>
 
-        {/* WebODM Iframe Viewer */}
+        {/* Right Column – Viewer */}
         <div className="lg:col-span-3 relative">
           <div className="bg-gray-800 rounded-lg shadow-lg overflow-hidden">
             <div className="h-[60vh] sm:h-[70vh] lg:h-[75vh] relative min-h-[420px]">
@@ -958,7 +1107,7 @@ export default function Model3D() {
             </div>
           </div>
 
-          {/* Info cards */}
+          {/* Bottom info cards */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-6">
             <div className="bg-gray-800 rounded-lg p-4">
               <h3 className="text-lg font-semibold text-white mb-2">Performance</h3>
