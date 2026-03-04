@@ -1,19 +1,39 @@
 import React, { useState, useRef, useEffect } from 'react';
 
+/**
+ * ThermalAnomalyDetector - A React component for detecting anomalies in thermal/RGB image pairs.
+ *
+ * This component provides a complete UI for uploading RGB and thermal images,
+ * sending them to a backend Flask API for anomaly detection, and displaying
+ * results including various visualizations (reconstructions, error maps, masks, overlays).
+ * It also integrates with a photo server to list and view recent drone photos.
+ *
+ * Features:
+ * - Upload RGB and thermal images via file picker.
+ * - Display list of recent photos from a server.
+ * - Send images to prediction API and show results.
+ * - Show all model outputs in a grid (like Colab notebook style).
+ * - Modal view for full-size photos with metadata.
+ * - Server health check.
+ *
+ * @returns {JSX.Element} The rendered component.
+ */
 const ThermalAnomalyDetector = () => {
-  const [results, setResults] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [photos, setPhotos] = useState([]);
-  const [photosLoading, setPhotosLoading] = useState(false);
-  const [selectedPhoto, setSelectedPhoto] = useState(null);
-  
+  // State management
+  const [results, setResults] = useState(null);           // Prediction results from API
+  const [loading, setLoading] = useState(false);          // Loading state during prediction
+  const [error, setError] = useState('');                  // Error message display
+  const [photos, setPhotos] = useState([]);                // List of photos from server
+  const [photosLoading, setPhotosLoading] = useState(false); // Loading state for photo fetching
+  const [selectedPhoto, setSelectedPhoto] = useState(null);  // Currently selected photo for modal
+
+  // Refs for image previews and file inputs
   const rgbImageRef = useRef(null);
   const thermalImageRef = useRef(null);
   const rgbUploadRef = useRef(null);
   const thermalUploadRef = useRef(null);
 
-  // Server configuration
+  // API base URLs – switch between development and production
   const API_BASE = process.env.NODE_ENV === 'production' 
     ? 'https://your-flask-api.com' 
     : 'http://localhost:5000';
@@ -22,7 +42,11 @@ const ThermalAnomalyDetector = () => {
     ? 'https://your-websocket-server.com'
     : 'http://localhost:8080';
 
-  // Fetch photos from server
+  /**
+   * Fetches the list of photos from the photo server.
+   * Updates the `photos` state with the response data.
+   * Sets an error if the request fails.
+   */
   const fetchPhotos = async () => {
     try {
       setPhotosLoading(true);
@@ -47,6 +71,12 @@ const ThermalAnomalyDetector = () => {
     fetchPhotos();
   }, []);
 
+  /**
+   * Handles image file selection and sets the preview in the corresponding image ref.
+   *
+   * @param {Event} event - The file input change event.
+   * @param {string} imageType - Either 'rgb' or 'thermal' to identify which preview to update.
+   */
   const handleImageUpload = (event, imageType) => {
     const file = event.target.files[0];
     if (!file) return;
@@ -66,6 +96,11 @@ const ThermalAnomalyDetector = () => {
     reader.readAsDataURL(file);
   };
 
+  /**
+   * Sends the uploaded RGB and thermal images to the prediction API.
+   * On success, updates the `results` state with the API response.
+   * On failure, sets an error message.
+   */
   const runPrediction = async () => {
     if (!rgbImageRef.current.src || !thermalImageRef.current.src) {
       setError('Please upload both RGB and thermal images');
@@ -106,6 +141,10 @@ const ThermalAnomalyDetector = () => {
     }
   };
 
+  /**
+   * Checks the health of the photo server by calling the /health endpoint.
+   * Displays an alert with the server status.
+   */
   const checkServerHealth = async () => {
     try {
       const response = await fetch(`${PHOTO_SERVER_BASE}/health`);
@@ -116,6 +155,12 @@ const ThermalAnomalyDetector = () => {
     }
   };
 
+  /**
+   * Returns a user-friendly title for a given visualization key.
+   *
+   * @param {string} key - The visualization key from the API response.
+   * @returns {string} The display title.
+   */
   const getVisualizationTitle = (key) => {
     const titles = {
       'original_rgb': 'Original RGB',
@@ -130,6 +175,12 @@ const ThermalAnomalyDetector = () => {
     return titles[key] || key;
   };
 
+  /**
+   * Returns a short description for a given visualization key.
+   *
+   * @param {string} key - The visualization key.
+   * @returns {string} Description.
+   */
   const getVisualizationDescription = (key) => {
     const descriptions = {
       'original_rgb': 'Uploaded RGB image',
@@ -144,14 +195,26 @@ const ThermalAnomalyDetector = () => {
     return descriptions[key] || '';
   };
 
+  /**
+   * Opens the photo modal for a selected photo.
+   *
+   * @param {Object} photo - The photo object containing metadata and URL.
+   */
   const openPhotoModal = (photo) => {
     setSelectedPhoto(photo);
   };
 
+  /** Closes the photo modal. */
   const closePhotoModal = () => {
     setSelectedPhoto(null);
   };
 
+  /**
+   * Formats a file size in bytes to a human-readable string.
+   *
+   * @param {number} bytes - File size in bytes.
+   * @returns {string} Formatted size (e.g., "1.23 MB").
+   */
   const formatFileSize = (bytes) => {
     if (bytes === 0) return '0 Bytes';
     const k = 1024;
@@ -160,6 +223,12 @@ const ThermalAnomalyDetector = () => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
+  /**
+   * Formats a date string to a locale string.
+   *
+   * @param {string} dateString - ISO date string.
+   * @returns {string} Formatted date and time.
+   */
   const formatDate = (dateString) => {
     return new Date(dateString).toLocaleString();
   };
@@ -167,7 +236,7 @@ const ThermalAnomalyDetector = () => {
   return (
     <div className="h-screen overflow-auto bg-gradient-to-br from-slate-50 to-blue-50">
       <div className="container mx-auto p-6 max-w-6xl">
-        {/* Header */}
+        {/* ----- Header Section ----- */}
         <div className="bg-white rounded-2xl shadow-lg p-8 mb-8">
           <h1 className="text-4xl font-bold text-center mb-3 bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
             Thermal Anomaly Detector
@@ -176,6 +245,7 @@ const ThermalAnomalyDetector = () => {
             Complete visualization - All outputs like Colab notebook
           </p>
           
+          {/* Action Buttons */}
           <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
             <button
               onClick={checkServerHealth}
@@ -193,7 +263,7 @@ const ThermalAnomalyDetector = () => {
           </div>
         </div>
 
-        {/* Photos Gallery Section */}
+        {/* ----- Photos Gallery Section ----- */}
         <div className="bg-white rounded-2xl shadow-lg p-8 mb-8">
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center">
@@ -263,9 +333,9 @@ const ThermalAnomalyDetector = () => {
           )}
         </div>
 
-        {/* Rest of your existing component remains the same */}
-        {/* Image Upload Section */}
+        {/* ----- Image Upload Section (RGB and Thermal) ----- */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+          {/* RGB Upload Card */}
           <div className="bg-white rounded-2xl shadow-lg p-6">
             <div className="flex items-center justify-center mb-4">
               <div className="bg-blue-100 rounded-full p-3">
@@ -289,6 +359,7 @@ const ThermalAnomalyDetector = () => {
             </div>
           </div>
 
+          {/* Thermal Upload Card */}
           <div className="bg-white rounded-2xl shadow-lg p-6">
             <div className="flex items-center justify-center mb-4">
               <div className="bg-orange-100 rounded-full p-3">
@@ -313,7 +384,7 @@ const ThermalAnomalyDetector = () => {
           </div>
         </div>
 
-        {/* Prediction Button */}
+        {/* ----- Prediction Button ----- */}
         <div className="text-center mb-8">
           <button
             onClick={runPrediction}
@@ -339,7 +410,7 @@ const ThermalAnomalyDetector = () => {
           </button>
         </div>
 
-        {/* Error Display */}
+        {/* ----- Error Display ----- */}
         {error && (
           <div className="bg-red-50 border-l-4 border-red-500 rounded-lg p-6 mb-8">
             <div className="flex items-start">
@@ -354,10 +425,10 @@ const ThermalAnomalyDetector = () => {
           </div>
         )}
 
-        {/* Results Display */}
+        {/* ----- Results Display ----- */}
         {results && (
           <div className="space-y-8">
-            {/* Anomaly Results Summary */}
+            {/* Anomaly Results Summary Cards */}
             <div className="bg-white rounded-2xl shadow-lg p-8">
               <div className="flex items-center justify-center mb-6">
                 <div className="bg-green-100 rounded-full p-3 mr-3">
@@ -367,6 +438,7 @@ const ThermalAnomalyDetector = () => {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+                {/* Anomaly Score Card */}
                 <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-xl p-6">
                   <h3 className="font-bold text-lg text-gray-800 mb-2">Anomaly Score</h3>
                   <p className="text-4xl font-bold text-blue-600 mb-2">
@@ -380,6 +452,7 @@ const ThermalAnomalyDetector = () => {
                   </div>
                 </div>
 
+                {/* Status Card (Anomaly / No Anomaly) */}
                 <div className={`rounded-xl p-6 ${
                   results.has_anomaly 
                     ? 'bg-gradient-to-br from-red-50 to-red-100 border-l-4 border-red-500' 
@@ -396,6 +469,7 @@ const ThermalAnomalyDetector = () => {
                   </p>
                 </div>
 
+                {/* Anomaly Coverage Card */}
                 <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-xl p-6">
                   <h3 className="font-bold text-lg text-gray-800 mb-2">Anomaly Coverage</h3>
                   <p className="text-4xl font-bold text-purple-600 mb-2">
@@ -477,7 +551,7 @@ const ThermalAnomalyDetector = () => {
           </div>
         )}
 
-        {/* Photo Modal */}
+        {/* ----- Photo Modal ----- */}
         {selectedPhoto && (
           <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl max-w-4xl max-h-full overflow-auto">
@@ -528,7 +602,7 @@ const ThermalAnomalyDetector = () => {
           </div>
         )}
 
-        {/* Loading Overlay */}
+        {/* ----- Loading Overlay (during prediction) ----- */}
         {loading && (
           <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 backdrop-blur-sm">
             <div className="bg-white p-8 rounded-2xl shadow-2xl text-center max-w-sm">
@@ -547,7 +621,7 @@ const ThermalAnomalyDetector = () => {
           </div>
         )}
 
-        {/* Footer */}
+        {/* ----- Footer ----- */}
         <div className="text-center py-6 text-gray-500 text-sm">
           <p>Complete Thermal Anomaly Detection • Colab-style Outputs</p>
         </div>
