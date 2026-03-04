@@ -2,24 +2,74 @@ import React, { useState, useRef } from 'react';
 import axios from 'axios';
 import './ThermalAnomaly.css';
 
-// Use relative path since Flask serves both frontend and API
+/**
+ * Base URL for API endpoints.
+ * Using relative path because Flask serves both frontend and API from the same origin.
+ * @constant {string}
+ */
 const API_BASE = '/api';
 
+/**
+ * ThermalAnomaly Component
+ *
+ * This component provides a user interface for thermal anomaly detection using a YOLOv8 model.
+ * Users can upload a thermal image, adjust the confidence threshold, and receive processed images
+ * with bounding boxes around detected anomalies. It also displays detection statistics and allows
+ * downloading the result.
+ *
+ * Features:
+ * - Upload thermal image (PNG, JPG, JPEG, BMP, TIFF) up to 16MB.
+ * - Adjust confidence threshold slider.
+ * - Send image to Flask API for detection.
+ * - Display original and processed images side by side.
+ * - Show detection statistics (count, average confidence, classes).
+ * - Download processed image.
+ * - Check server health on load.
+ *
+ * @returns {JSX.Element} The rendered component.
+ */
 export default function ThermalAnomaly() {
+  // ========== State ==========
+  /** @type {[string|null, Function]} Base64‑encoded original image data. */
   const [selectedImage, setSelectedImage] = useState(null);
+
+  /** @type {[string|null, Function]} Base64‑encoded processed image with bounding boxes. */
   const [processedImage, setProcessedImage] = useState(null);
+
+  /** @type {[Array, Function]} List of detection objects (class, confidence, bbox). */
   const [detections, setDetections] = useState([]);
+
+  /** @type {[boolean, Function]} Loading flag during API call. */
   const [loading, setLoading] = useState(false);
+
+  /** @type {[number, Function]} Confidence threshold (0.1 to 0.9). */
   const [confidence, setConfidence] = useState(0.3);
+
+  /** @type {[Object|null, Function]} Statistics object (total, avgConfidence, maxConfidence, classes). */
   const [stats, setStats] = useState(null);
+
+  /** @type {[string|null, Function]} Error message to display. */
   const [error, setError] = useState(null);
+
+  /** @type {[string, Function]} Server health status: 'checking', 'healthy', 'no-model', 'offline'. */
   const [serverStatus, setServerStatus] = useState('checking');
+
+  /** @type {React.RefObject} Reference to the hidden file input element. */
   const fileInputRef = useRef(null);
 
+  // ========== Effects ==========
+  /**
+   * Check server health on component mount.
+   */
   React.useEffect(() => {
     checkServerHealth();
   }, []);
 
+  // ========== API Interaction ==========
+  /**
+   * Checks the health of the backend server.
+   * Sets serverStatus based on response or error.
+   */
   const checkServerHealth = async () => {
     try {
       const response = await axios.get(`${API_BASE}/health`);
@@ -34,6 +84,85 @@ export default function ThermalAnomaly() {
     }
   };
 
+  /**
+   * Sends the selected image to the /detect endpoint for processing.
+   * Updates processedImage, detections, and stats on success.
+   * Handles various error conditions (timeout, connection, server error).
+   */
+  const processImage = async () => {
+    if (!selectedImage) return;
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      // Convert base64 image to a Blob for FormData.
+      const response = await fetch(selectedImage);
+      const blob = await response.blob();
+
+      const formData = new FormData();
+      formData.append('image', blob, 'thermal_image.jpg');
+      formData.append('confidence', confidence.toString());
+
+      const result = await axios.post(`${API_BASE}/detect`, formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+        timeout: 30000, // 30 second timeout
+      });
+
+      const data = result.data;
+
+      if (data.success) {
+        setProcessedImage(data.processed_image);
+        setDetections(data.detections || []);
+
+        // Calculate statistics from detections.
+        if (data.detections && data.detections.length > 0) {
+          const confidences = data.detections.map(d => d.confidence);
+          const avgConfidence = confidences.reduce((a, b) => a + b, 0) / confidences.length;
+          const maxConfidence = Math.max(...confidences);
+          const classes = [...new Set(data.detections.map(d => d.class_name))];
+
+          setStats({
+            totalDetections: data.detections.length,
+            avgConfidence,
+            maxConfidence,
+            classes,
+            timestamp: data.timestamp
+          });
+        }
+      } else {
+        setError(data.error || 'Failed to process image');
+      }
+    } catch (error) {
+      console.error('Error:', error);
+      if (error.code === 'ECONNABORTED') {
+        setError('Request timeout. Please try again.');
+      } else if (error.response) {
+        // Server responded with an error status.
+        setError(error.response.data.error || 'Server error occurred');
+      } else if (error.request) {
+        // Request was made but no response received.
+        setError('Cannot connect to server. Make sure the Flask server is running.');
+      } else {
+        // Something else happened.
+        setError('An unexpected error occurred');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ========== UI Handlers ==========
+  /**
+   * Handles file selection from the hidden file input.
+   * Reads the file as a data URL (base64) and sets selectedImage.
+   * Also resets processed results and clears any error.
+   * Performs a file size check (max 16 MB) to match server limit.
+   *
+   * @param {Event} event - The file input change event.
+   */
   const handleImageUpload = (event) => {
     const file = event.target.files[0];
     if (file) {
@@ -55,72 +184,17 @@ export default function ThermalAnomaly() {
     }
   };
 
-  const processImage = async () => {
-    if (!selectedImage) return;
-
-    setLoading(true);
-    setError(null);
-
-    try {
-      // Convert base64 to blob
-      const response = await fetch(selectedImage);
-      const blob = await response.blob();
-      
-      const formData = new FormData();
-      formData.append('image', blob, 'thermal_image.jpg');
-      formData.append('confidence', confidence.toString());
-
-      const result = await axios.post(`${API_BASE}/detect`, formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-        timeout: 30000, // 30 second timeout
-      });
-
-      const data = result.data;
-      
-      if (data.success) {
-        setProcessedImage(data.processed_image);
-        setDetections(data.detections || []);
-        
-        // Calculate statistics
-        if (data.detections && data.detections.length > 0) {
-          const confidences = data.detections.map(d => d.confidence);
-          const avgConfidence = confidences.reduce((a, b) => a + b, 0) / confidences.length;
-          const maxConfidence = Math.max(...confidences);
-          const classes = [...new Set(data.detections.map(d => d.class_name))];
-          
-          setStats({
-            totalDetections: data.detections.length,
-            avgConfidence,
-            maxConfidence,
-            classes,
-            timestamp: data.timestamp
-          });
-        }
-      } else {
-        setError(data.error || 'Failed to process image');
-      }
-    } catch (error) {
-      console.error('Error:', error);
-      if (error.code === 'ECONNABORTED') {
-        setError('Request timeout. Please try again.');
-      } else if (error.response) {
-        setError(error.response.data.error || 'Server error occurred');
-      } else if (error.request) {
-        setError('Cannot connect to server. Make sure the Flask server is running.');
-      } else {
-        setError('An unexpected error occurred');
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  /**
+   * Programmatically clicks the hidden file input to open the file picker.
+   */
   const triggerFileInput = () => {
     fileInputRef.current?.click();
   };
 
+  /**
+   * Resets the entire component state to its initial values.
+   * Also clears the file input value.
+   */
   const resetAll = () => {
     setSelectedImage(null);
     setProcessedImage(null);
@@ -132,6 +206,10 @@ export default function ThermalAnomaly() {
     }
   };
 
+  /**
+   * Downloads the processed image (with bounding boxes) as a JPG file.
+   * Creates a temporary link and triggers a download.
+   */
   const downloadProcessedImage = () => {
     if (processedImage) {
       const link = document.createElement('a');
@@ -143,6 +221,12 @@ export default function ThermalAnomaly() {
     }
   };
 
+  // ========== Helper Functions ==========
+  /**
+   * Returns a status message and type based on serverStatus.
+   * Used to display a badge in the header.
+   * @returns {Object} { message: string, type: string } – type can be 'success', 'warning', 'error', 'info'.
+   */
   const getStatusMessage = () => {
     switch (serverStatus) {
       case 'healthy':
@@ -160,8 +244,10 @@ export default function ThermalAnomaly() {
 
   const status = getStatusMessage();
 
+  // ========== Render ==========
   return (
     <div className="thermal-anomaly-page">
+      {/* Header with title and status badge */}
       <div className="page-header">
         <h1>🔥 Thermal Anomaly Detection</h1>
         <p>AI-powered thermal image analysis using YOLOv8</p>
@@ -171,7 +257,7 @@ export default function ThermalAnomaly() {
       </div>
 
       <div className="page-content">
-        {/* Server Status */}
+        {/* Server Status Troubleshooting */}
         {serverStatus !== 'healthy' && (
           <div className="status-card">
             <h3>Server Connection</h3>
@@ -195,7 +281,7 @@ export default function ThermalAnomaly() {
           </div>
         )}
 
-        {/* Controls */}
+        {/* Upload and Confidence Controls */}
         <div className="controls-card">
           <div className="upload-section">
             <input
@@ -233,6 +319,7 @@ export default function ThermalAnomaly() {
             )}
           </div>
 
+          {/* Action buttons (Detect, Download, Reset) */}
           {selectedImage && (
             <div className="action-buttons">
               <button 
@@ -270,7 +357,7 @@ export default function ThermalAnomaly() {
           </div>
         )}
 
-        {/* Image Display */}
+        {/* Image Display Section */}
         {selectedImage && (
           <div className="image-container">
             <div className="image-section">
@@ -327,7 +414,7 @@ export default function ThermalAnomaly() {
           </div>
         )}
 
-        {/* Detection Results */}
+        {/* Detection Results and Statistics */}
         {detections.length > 0 && (
           <div className="results-section">
             <h3>📊 Detection Results</h3>
@@ -385,7 +472,7 @@ export default function ThermalAnomaly() {
           </div>
         )}
 
-        {/* Welcome Section */}
+        {/* Welcome Section (shown when no image is selected) */}
         {!selectedImage && serverStatus === 'healthy' && (
           <div className="welcome-section">
             <div className="welcome-card">
