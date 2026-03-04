@@ -2,19 +2,32 @@
 import React, { useEffect, useRef, useState } from "react";
 import AgoraRTC from "agora-rtc-sdk-ng";
 
+/**
+ * DroneStreamViewer Component
+ *
+ * This component displays a live video stream from a drone via Agora RTC.
+ * It also maintains a separate WebSocket connection to a custom server (optional).
+ * The Agora connection can be configured with App ID, channel, token, etc.
+ * It handles connection lifecycle, error states, and provides a user interface
+ * to manage the stream.
+ *
+ * @returns {JSX.Element} The rendered component.
+ */
 export default function DroneStreamViewer() {
-  const videoRef = useRef(null);
-  const clientRef = useRef(null);
-  const wsRef = useRef(null); // separate server WS
+  // ========== Refs ==========
+  const videoRef = useRef(null);          // Reference to the <video> element where the stream will be played.
+  const clientRef = useRef(null);         // Reference to the AgoraRTC client instance.
+  const wsRef = useRef(null);             // Reference to the separate WebSocket (server) connection.
 
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [error, setError] = useState(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState("disconnected");
-  const [streamStats, setStreamStats] = useState({});
-  const [showConfig, setShowConfig] = useState(false);
+  // ========== State ==========
+  const [isPlaying, setIsPlaying] = useState(false);               // Whether a video stream is currently playing.
+  const [error, setError] = useState(null);                         // Current error message (if any).
+  const [isLoading, setIsLoading] = useState(false);                // Whether an Agora connection is in progress.
+  const [connectionStatus, setConnectionStatus] = useState("disconnected"); // Current status string.
+  const [streamStats, setStreamStats] = useState({});               // Statistics about active streams (keyed by uid).
+  const [showConfig, setShowConfig] = useState(false);              // Whether to show the configuration panel.
 
-  // Agora Configuration - update as needed
+  // Agora configuration – can be updated by user.
   const [agoraConfig, setAgoraConfig] = useState({
     appId: "c3e998dadf0342c181f1196dd94f15a4",
     channel: "app",
@@ -24,13 +37,19 @@ export default function DroneStreamViewer() {
     role: "audience",
   });
 
-  // lifecycle coordination refs
-  const isInitializingRef = useRef(false);
-  const isJoiningRef = useRef(false);
-  const hasJoinedRef = useRef(false);
-  const pendingCleanupRef = useRef(false);
+  // ========== Lifecycle Coordination Refs ==========
+  // These refs help manage asynchronous operations and prevent race conditions.
+  const isInitializingRef = useRef(false);   // True while connectAgora() is running.
+  const isJoiningRef = useRef(false);        // True while client.join() is in progress.
+  const hasJoinedRef = useRef(false);        // True after successful join.
+  const pendingCleanupRef = useRef(false);   // True if disconnect was requested during join.
 
-  // safe listener removal
+  // ========== Helper: Remove All Agora Listeners Safely ==========
+  /**
+   * Safely removes all event listeners from an Agora client.
+   * Catches and logs any errors.
+   * @param {Object} client - The AgoraRTC client instance.
+   */
   const removeAllListenersSafe = (client) => {
     try {
       if (client && typeof client.removeAllListeners === "function") {
@@ -41,13 +60,15 @@ export default function DroneStreamViewer() {
     }
   };
 
-  // =========================
-  // Server WebSocket (separate)
-  // Initializes once per component mount. Not closed on Agora reconnect.
-  // =========================
+  // ========== Server WebSocket (Separate) ==========
+  /**
+   * Effect to create a single, long-lived WebSocket connection to a custom server.
+   * This connection is independent of the Agora stream and is created once on mount.
+   * It is closed only on component unmount.
+   */
   useEffect(() => {
     const url = "wss://your-server.example/ws"; // <-- replace with your server WS URL
-    if (wsRef.current) return;
+    if (wsRef.current) return; // Already connected
 
     try {
       const ws = new WebSocket(url);
@@ -71,6 +92,7 @@ export default function DroneStreamViewer() {
       console.error("Failed to create server WS", e);
     }
 
+    // Cleanup on unmount
     return () => {
       try {
         wsRef.current?.close();
@@ -79,12 +101,19 @@ export default function DroneStreamViewer() {
     };
   }, []);
 
-  // ===== Agora connect =====
+  // ========== Agora Connect ==========
+  /**
+   * Establishes an Agora RTC connection using the current configuration.
+   * Handles all steps: client creation, listener registration, joining, and setting role.
+   * Manages the isInitializingRef, isJoiningRef, and hasJoinedRef flags to avoid concurrency issues.
+   */
   const connectAgora = async () => {
+    // Prevent multiple simultaneous initialization attempts.
     if (isInitializingRef.current) return;
     isInitializingRef.current = true;
     setError(null);
 
+    // Validate required fields.
     if (!agoraConfig.appId || agoraConfig.appId === "YOUR_APP_ID") {
       setError("Please set your Agora App ID in the configuration");
       setShowConfig(true);
@@ -105,13 +134,15 @@ export default function DroneStreamViewer() {
     setIsLoading(true);
     setConnectionStatus("initializing");
 
+    // Create a new Agora client (live mode, VP8 codec).
     const client = AgoraRTC.createClient({ mode: "live", codec: "vp8" });
     clientRef.current = client;
 
-    // Handlers
+    // ----- Event Handlers -----
     const handleUserPublished = async (user, mediaType) => {
       console.log("User published:", user.uid, mediaType);
       try {
+        // Subscribe to the user's media track.
         await client.subscribe(user, mediaType);
         if (mediaType === "video" && user.videoTrack && videoRef.current) {
           user.videoTrack.play(videoRef.current);
@@ -125,6 +156,7 @@ export default function DroneStreamViewer() {
           user.audioTrack.play();
         }
 
+        // Update stream statistics.
         setStreamStats((prev) => ({
           ...prev,
           [user.uid]: {
@@ -144,7 +176,7 @@ export default function DroneStreamViewer() {
       setStreamStats((prev) => {
         const next = { ...prev };
         delete next[user.uid];
-        // update isPlaying based on remaining streams
+        // Check if any video stream remains.
         const hasVideoStream = Object.values(next).some((s) => s.video);
         setIsPlaying(hasVideoStream);
         if (!hasVideoStream) setConnectionStatus("waiting");
@@ -173,13 +205,14 @@ export default function DroneStreamViewer() {
       setConnectionStatus(curState);
     };
 
-    // register listeners
+    // Register all listeners.
     client.on("user-published", handleUserPublished);
     client.on("user-unpublished", handleUserUnpublished);
     client.on("user-joined", handleUserJoined);
     client.on("user-left", handleUserLeft);
     client.on("connection-state-change", handleConnectionStateChange);
 
+    // Token expiration warnings.
     client.on("token-privilege-will-expire", () => {
       console.warn("Token will expire soon");
       setError("Token will expire soon - please refresh");
@@ -190,11 +223,12 @@ export default function DroneStreamViewer() {
       setError("Token expired - please refresh the page");
     });
 
-    // join
+    // ----- Join the channel -----
     setConnectionStatus("joining");
     isJoiningRef.current = true;
 
     try {
+      // Convert uid to number if it's a numeric string (Agora expects number or string).
       const uidVal = (() => {
         const n = Number(agoraConfig.uid);
         return Number.isFinite(n) ? n : agoraConfig.uid;
@@ -210,6 +244,7 @@ export default function DroneStreamViewer() {
       isJoiningRef.current = false;
       hasJoinedRef.current = true;
 
+      // Set client role (audience or host).
       try {
         await client.setClientRole(agoraConfig.role);
       } catch (roleErr) {
@@ -218,7 +253,7 @@ export default function DroneStreamViewer() {
 
       setConnectionStatus("waiting");
 
-      // if cleanup requested during join, leave now
+      // If a disconnect was requested during join, clean up immediately.
       if (pendingCleanupRef.current) {
         try {
           await client.leave();
@@ -246,18 +281,24 @@ export default function DroneStreamViewer() {
     }
   };
 
-  // ===== Agora disconnect =====
+  // ========== Agora Disconnect ==========
+  /**
+   * Disconnects the Agora client.
+   * Handles both normal disconnection and the case where a join is still in progress.
+   */
   const disconnectAgora = async () => {
     const client = clientRef.current;
     if (!client) return;
 
-    // If join is in progress, mark pending and remove Agora listeners only
+    // If a join is in progress, we cannot call leave() immediately.
+    // Instead, set pendingCleanup and remove listeners; the ongoing join will handle it.
     if (isJoiningRef.current) {
       pendingCleanupRef.current = true;
       removeAllListenersSafe(client);
       return;
     }
 
+    // Normal disconnection.
     try {
       if (hasJoinedRef.current) {
         await client.leave();
@@ -275,7 +316,11 @@ export default function DroneStreamViewer() {
     }
   };
 
-  // Cleanup on unmount: close both Agora client and server WS
+  // ========== Cleanup on Unmount ==========
+  /**
+   * Effect to clean up both Agora client and server WebSocket when the component unmounts.
+   * Handles the case where a join is still in progress.
+   */
   useEffect(() => {
     return () => {
       const client = clientRef.current;
@@ -298,6 +343,7 @@ export default function DroneStreamViewer() {
         }
       }
 
+      // Close server WebSocket.
       try {
         wsRef.current?.close();
       } catch (e) {}
@@ -306,11 +352,19 @@ export default function DroneStreamViewer() {
     // run only on mount/unmount
   }, []);
 
-  // UI handlers
+  // ========== UI Handlers ==========
+  /**
+   * Updates a single field in the Agora configuration.
+   * @param {string} key - The config key.
+   * @param {any} value - The new value.
+   */
   const handleConfigChange = (key, value) => {
     setAgoraConfig((prev) => ({ ...prev, [key]: value }));
   };
 
+  /**
+   * Applies the current configuration by disconnecting (if needed) and reconnecting.
+   */
   const handleApply = async () => {
     setError(null);
     // Only touch Agora client; server WS remains untouched.
@@ -320,10 +374,17 @@ export default function DroneStreamViewer() {
     await connectAgora();
   };
 
+  /**
+   * Disconnects the Agora client manually.
+   */
   const handleDisconnectClick = async () => {
     await disconnectAgora();
   };
 
+  /**
+   * Returns a Tailwind CSS background color class based on the connection status.
+   * @returns {string} The color class.
+   */
   const getStatusColor = () => {
     switch (connectionStatus) {
       case "connected":
@@ -339,6 +400,10 @@ export default function DroneStreamViewer() {
     }
   };
 
+  /**
+   * Returns a human‑readable status text based on the connection status.
+   * @returns {string} The status text.
+   */
   const getStatusText = () => {
     switch (connectionStatus) {
       case "connected":
@@ -360,6 +425,7 @@ export default function DroneStreamViewer() {
     }
   };
 
+  // ========== Render ==========
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-gray-100 py-8 px-4">
       <div className="max-w-6xl mx-auto">
@@ -373,6 +439,7 @@ export default function DroneStreamViewer() {
         </div>
 
         <div className="grid lg:grid-cols-3 gap-8">
+          {/* Main video panel */}
           <div className="lg:col-span-2">
             <div className="bg-white rounded-2xl shadow-xl overflow-hidden">
               <div className="flex justify-between items-center p-6 border-b border-gray-200">
@@ -385,6 +452,7 @@ export default function DroneStreamViewer() {
                   </p>
                 </div>
                 <div className="flex items-center space-x-4">
+                  {/* Status indicator */}
                   <div className="flex items-center space-x-2">
                     <div className={`w-3 h-3 rounded-full ${getStatusColor()}`} />
                     <span
@@ -425,6 +493,7 @@ export default function DroneStreamViewer() {
                 </div>
               </div>
 
+              {/* Video container */}
               <div className="relative bg-black">
                 <video
                   ref={videoRef}
@@ -434,6 +503,7 @@ export default function DroneStreamViewer() {
                   className="w-full h-96 object-contain"
                 />
 
+                {/* Loading overlay */}
                 {isLoading && (
                   <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-80">
                     <div className="text-white text-center">
@@ -444,6 +514,7 @@ export default function DroneStreamViewer() {
                   </div>
                 )}
 
+                {/* Error overlay */}
                 {error && (
                   <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-90">
                     <div className="text-white text-center p-8 max-w-md">
@@ -468,6 +539,7 @@ export default function DroneStreamViewer() {
                   </div>
                 )}
 
+                {/* Waiting for stream overlay */}
                 {!isLoading && !error && !isPlaying && (
                   <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-80">
                     <div className="text-white text-center p-8">
@@ -481,6 +553,7 @@ export default function DroneStreamViewer() {
                   </div>
                 )}
 
+                {/* Live indicator when playing */}
                 {isPlaying && (
                   <div className="absolute top-4 left-4 bg-black bg-opacity-70 text-white px-3 py-2 rounded-lg text-sm">
                     <div className="flex items-center space-x-2">
@@ -491,6 +564,7 @@ export default function DroneStreamViewer() {
                 )}
               </div>
 
+              {/* Stream information panel */}
               <div className="p-6 bg-gray-50">
                 <h3 className="font-semibold text-gray-800 mb-3">Stream Information</h3>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
@@ -517,7 +591,9 @@ export default function DroneStreamViewer() {
             </div>
           </div>
 
+          {/* Right panel: Configuration and status */}
           <div className={`space-y-6 ${showConfig ? "block" : "hidden lg:block"}`}>
+            {/* Configuration card */}
             <div className="bg-white rounded-2xl shadow-xl p-6">
               <h3 className="text-lg font-semibold text-gray-800 mb-4">🔧 Stream Configuration</h3>
 
@@ -596,6 +672,7 @@ export default function DroneStreamViewer() {
               </div>
             </div>
 
+            {/* Connection status card */}
             <div className="bg-white rounded-2xl shadow-xl p-6">
               <h3 className="text-lg font-semibold text-gray-800 mb-4">📊 Connection Status</h3>
 
@@ -620,6 +697,7 @@ export default function DroneStreamViewer() {
                   <span className="font-medium">VP8</span>
                 </div>
 
+                {/* List of active streams */}
                 {Object.entries(streamStats).map(([uid, stats]) => (
                   <div key={uid} className="bg-gray-50 p-3 rounded-lg">
                     <div className="flex justify-between items-center mb-2">
@@ -636,6 +714,7 @@ export default function DroneStreamViewer() {
               </div>
             </div>
 
+            {/* Mobile app setup help */}
             <div className="bg-blue-50 rounded-2xl shadow-xl p-6 border border-blue-200">
               <h3 className="text-lg font-semibold text-blue-800 mb-3">📱 Mobile App Setup</h3>
 
@@ -667,6 +746,7 @@ export default function DroneStreamViewer() {
           </div>
         </div>
 
+        {/* Mobile floating config toggle */}
         <div className="lg:hidden fixed bottom-4 right-4 z-10">
           <button
             onClick={() => setShowConfig(!showConfig)}
