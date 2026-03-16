@@ -1,195 +1,43 @@
-# Drone Command Platform
+# Drone Projects Planner
+A comprehensive React-based interface for planning autonomous drone routes, managing Waypoint & Area (Lawnmower) missions, connecting to real-time streams, and pushing routes to a backend mission server.
 
-Une station de contrôle au sol professionnelle basée sur le Web pour la planification de missions UAV, le suivi de vol en temps réel, la diffusion vidéo en direct et le traitement avancé des données.
+## Features
+- **Waypoint Missions**: Plot detailed waypoint lines, control drone speeds, adjust gimbal pitch per waypoint.
+- **Area Missions**: Draw polygons, generate automatic lawnmower paths with adjustable front/side overlap, optimal GSD calculation, and precise row spacing.
+- **3D Modeling & Streaming**: Integrates 3D visualization and live streaming functionalities out of the box.
+- **WebSocket Exporting**: Export paths locally as KML/KMZ or send them instantly via WebSocket to the Node/Python server stack for execution.
 
-Construite avec React, intégrée avec le SDK DJI (via une application mobile compagnon), WebODM, Agora RTC et une API personnalisée de détection thermique basée sur YOLOv8.
+## Getting Started
 
----
+### Prerequisites
+- [Node.js](https://nodejs.org) (v18 or higher recommended)
+- [Python 3](https://www.python.org/downloads/) (for the backend server, if required)
+- `npm` or `yarn`
 
-# Aperçu
+### Installation
+1. Clone the project or navigate into the root directory of this project.
+2. Install the frontend dependencies:
+   ```bash
+   cd my-app
+   npm install
+   ```
 
-La plateforme Drone Command fournit un flux de travail complet pour les opérations de drones :
-
-- Planification de mission (Waypoint / Area / Linear)
-- Suivi de vol en temps réel (WebSocket)
-- Diffusion vidéo en direct (Agora RTC)
-- Génération de modèles 3D (WebODM)
-- Détection d’anomalies thermiques (YOLOv8 + Flask API)
-
-Architecture :
-
-- Télémétrie → Serveur WebSocket
-- Vidéo → Agora RTC
-- Reconstruction 3D → WebODM
-- Analyse thermique → API Flask
-
----
-
-# Fonctionnalités
-
-## Planificateur de mission
-
-- Ajout de points via Google Maps
-- Mode zone (polygone + trajectoire tondeuse automatique)
-- Mode linéaire (corridor survey)
-- Calcul en temps réel du GSD
-- Recommandation de chevauchement
-- Export JSON / KML / CSV
-
-## Suivi de vol en direct
-
-- Télémétrie : lat/lon, altitude, vitesse, cap, batterie
-- Marqueur drone dynamique
-- Enregistrement de trajectoire
-- Commandes mission (start / pause / stop)
-
-## Diffusion vidéo
-
-- Streaming via Agora RTC
-- Configuration App ID / Channel / Token
-- Reconnexion automatique
-
-## Génération de modèles 3D
-
-- Upload d’images vers WebODM
-- Suivi de progression des tâches
-- Visualisation 3D intégrée
-- Téléchargement du modèle texturé
-
-## Détection d’anomalies thermiques
-
-- Upload image thermique
-- Ajustement seuil de confiance
-- Affichage des bounding boxes
-- Téléchargement image annotée
-
----
-
-# Stack Technique
-
-| Couche | Technologies |
-|--------|-------------|
-| Frontend | React 18, React Router 6, Tailwind CSS, Google Maps API, Turf.js, Agora RTC SDK, Axios |
-| State Management | React Context |
-| Backend | WebSocket Server (Node.js / Python), WebODM, Flask API |
-| Build Tool | Vite |
-
----
-
-# Prérequis
-
-- Node.js 18+
-- Clé Google Maps API
-- App ID Agora
-- Instance WebODM (local ou distante)
-- API Flask thermique
-- Serveur WebSocket
-
----
-
-# Installation
-
+### Running Locally
+To run the frontend client (Vite Server):
 ```bash
-git clone <repo-url>
-cd drone-command
-npm install
 npm run dev
 ```
+Navigate to `http://localhost:5173/` in your browser.
 
----
+*(If you are running the backend services in the `backend/` folder, ensure they are launched on their respective ports. Refer to the backend's README or start script.)*
 
-# Variables d'environnement
+## Project Structure
+- `src/components/common`: Shared layout UI elements (Sidebar, Navbar, etc.)
+- `src/components/map`: Map canvas implementations, Google Maps wrappers, Overlays.
+- `src/components/panels`: Sidebar forms and UI panels controlling route parameters.
+- `src/contexts`: Global state managers (WebSockets, Mission context, Planner state logic).
+- `src/utils`: KML/KMZ export logic, geometry calculations, global parameter definitions.
+- `src/pages`: Distinct features like Planner, Stream, Model3D, etc.
 
-Créer un fichier `.env` :
-
-```
-VITE_GOOGLE_MAPS_API_KEY=your_key
-VITE_WEBSOCKET_URL=ws://localhost:8080
-VITE_WEBODM_URL=http://localhost:8000
-VITE_AGORA_APP_ID=your_agora_app_id
-```
-
----
-
-# Structure du projet
-
-```
-src/
-├── components/
-├── contexts/
-├── layouts/
-├── pages/
-├── utils/
-├── App.jsx
-├── main.jsx
-└── index.css
-```
-
----
-
-# Format WebSocket
-
-Exemple de message télémétrie :
-
-```json
-{
-  "type": "telemetry_data",
-  "telemetry": {
-    "position": {
-      "latitude": 37.7749,
-      "longitude": -122.4194,
-      "altitude": 100
-    },
-    "movement": {
-      "speed": 5.2,
-      "heading": 90
-    },
-    "status": {
-      "batteryLevel": 85
-    }
-  }
-}
-```
-
-Types supportés :
-
-- identify
-- ping
-- drone_status
-- mission_status
-- telemetry_data
-- error
-
----
-
-# API WebODM utilisée
-
-- POST /api/token-auth/
-- GET /api/projects/
-- POST /api/projects/
-- POST /api/projects/{id}/tasks/
-- GET /api/projects/{id}/tasks/{taskId}/
-- GET /api/projects/{id}/tasks/{taskId}/download/textured_model.zip
-
----
-
-# API Détection Thermique
-
-Endpoints :
-
-- GET /health
-- POST /detect
-
-Réponse :
-
-```json
-{
-  "success": true,
-  "processed_image": "base64_string",
-  "detections": [],
-  "timestamp": "ISO8601"
-}
-```
-
----
-
+Detailed architectural diagrams and component relations can be found in `ARCHITECTURE.md`.
+Detailed usage instructions can be found in `USER_GUIDE.md`.
